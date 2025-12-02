@@ -385,13 +385,15 @@ void bonjour_jabber_process_packet(PurpleBuddy *pb, xmlnode *packet) {
   }
 }
 
-static void bonjour_jabber_stream_ended(BonjourJabberConversation *bconv) {
-
-  /* Inform the user that the conversation has been closed */
+void
+bonjour_jabber_stream_ended(BonjourJabberConversation *bconv)
+{
   BonjourBuddy *bb = NULL;
-  const gchar *name = bconv->pb ? purple_buddy_get_name(bconv->pb) : "(unknown)";
+  const char *name = NULL;
 
-  purple_debug_info("bonjour", "Received conversation close notification from %s.\n", name);
+  purple_debug_info("bonjour", "Received conversation close notification from %s\n",
+    bconv->pb ? purple_buddy_get_name(bconv->pb) :
+    (bconv->buddy_name ? bconv->buddy_name : "(unknown)"));
 
   if(bconv->pb != NULL)
     bb = purple_buddy_get_protocol_data(bconv->pb);
@@ -411,6 +413,7 @@ static void bonjour_jabber_stream_ended(BonjourJabberConversation *bconv) {
   if(bb)
     bb->conversation = NULL;
 }
+
 
 static void
 _client_socket_handler(gpointer data, gint socket, PurpleInputCondition condition)
@@ -442,8 +445,20 @@ _client_socket_handler(gpointer data, gint socket, PurpleInputCondition conditio
     }
     return;
   } else if (len == 0) { /* The other end has closed the socket */
-    const gchar *name = purple_buddy_get_name(bconv->pb);
-    purple_debug_warning("bonjour", "Connection closed (without stream end) by %s.\n", (name) ? name : "(unknown)");
+    const gchar *name = NULL;
+
+    /* Try multiple sources for the name */
+    if (bconv->pb) {
+      name = purple_buddy_get_name(bconv->pb);
+    }
+    if (!name && bconv->buddy_name) {
+      name = bconv->buddy_name;
+    }
+    if (!name) {
+      name = "(unknown)";
+    }
+
+    purple_debug_warning("bonjour", "Connection closed (without stream end) by %s.\n", name);
     bonjour_jabber_stream_ended(bconv);
     return;
   }
@@ -453,6 +468,8 @@ _client_socket_handler(gpointer data, gint socket, PurpleInputCondition conditio
   purple_debug_info("bonjour", "Receive: -%s- %" G_GSSIZE_FORMAT " bytes\n", message, len);
   bonjour_parser_process(bconv, message, len);
 }
+
+
 
 struct _stream_start_data {
   char *msg;
@@ -657,6 +674,7 @@ void bonjour_jabber_stream_started(BonjourJabberConversation *bconv) {
 #define INET6_ADDRSTRLEN 46
 #endif
 
+
 static void
 _server_socket_handler(gpointer data, int server_socket, PurpleInputCondition condition)
 {
@@ -667,7 +685,7 @@ _server_socket_handler(gpointer data, int server_socket, PurpleInputCondition co
 #ifdef HAVE_INET_NTOP
   char addrstr[INET6_ADDRSTRLEN];
 #endif
-  const char *address_text;
+  const char *address_text = NULL;
   struct _match_buddies_by_address_t *mbba;
   BonjourJabberConversation *bconv;
   GSList *buddies;
@@ -688,7 +706,14 @@ _server_socket_handler(gpointer data, int server_socket, PurpleInputCondition co
     address_text = inet_ntop(their_addr.sa.sa_family,
       &their_addr.in6.sin6_addr, addrstr, sizeof(addrstr));
 
-    append_iface_if_linklocal(addrstr, their_addr.in6.sin6_scope_id);
+    /* For link-local addresses, append the scope ID */
+    if (address_text && IN6_IS_ADDR_LINKLOCAL(&their_addr.in6.sin6_addr)) {
+      append_iface_if_linklocal(addrstr, their_addr.in6.sin6_scope_id);
+    }
+
+    purple_debug_info("bonjour", "IPv6 connection from %s (scope: %u)\n",
+      address_text ? address_text : "(failed to convert)",
+      their_addr.in6.sin6_scope_id);
   } else {
     address_text = inet_ntop(their_addr.sa.sa_family,
       &their_addr.in.sin_addr, addrstr, sizeof(addrstr));
@@ -696,7 +721,16 @@ _server_socket_handler(gpointer data, int server_socket, PurpleInputCondition co
 #else
   address_text = inet_ntoa(their_addr.in.sin_addr);
 #endif
+
+  /* Check if we got a valid address */
+  if (!address_text || strlen(address_text) == 0 || strcmp(address_text, "0.0.0.0") == 0) {
+    purple_debug_error("bonjour", "Failed to get valid IP address from incoming connection\n");
+    close(client_socket);
+    return;
+  }
+
   purple_debug_info("bonjour", "Received incoming connection from %s.\n", address_text);
+
   mbba = g_new0(struct _match_buddies_by_address_t, 1);
   mbba->address = address_text;
 
@@ -704,31 +738,24 @@ _server_socket_handler(gpointer data, int server_socket, PurpleInputCondition co
   g_slist_foreach(buddies, _match_buddies_by_address, mbba);
   g_slist_free(buddies);
 
-  //if (mbba->matched_buddies == NULL) {
-  //  purple_debug_info("bonjour", "We don't like invisible buddies, this is not a superheroes comic\n");
-  //  g_free(mbba);
-  //  close(client_socket);
-  //  return;
-  //}
-
-
-  //g_slist_free(mbba->matched_buddies);
-  //g_free(mbba);
-   buddies = purple_find_buddies(jdata->account, NULL);
-  g_slist_foreach(buddies, _match_buddies_by_address, mbba);
-  g_slist_free(buddies);
-
-  /* Barev / manual mode:
-   * Don't drop connections just because we haven't matched a buddy by IP yet.
-   * We'll attach the conversation later when we see the stream 'from' JID.
-   */
   if (mbba->matched_buddies == NULL) {
-    purple_debug_info("bonjour",
-      "No buddy matched for incoming connection from %s; keeping it open (Barev manual mode)\n",
-      address_text);
-  } else {
-    g_slist_free(mbba->matched_buddies);
+    /* For Barev/manual mode - accept unknown connections temporarily */
+    purple_debug_info("bonjour", "No buddy matched for incoming connection from %s; keeping it open (Barev manual mode)\n", address_text);
+
+    /* Create conversation without buddy association yet */
+    bconv = bonjour_jabber_conv_new(NULL, jdata->account, address_text);
+    bconv->socket = client_socket;
+    bconv->rx_handler = purple_input_add(client_socket, PURPLE_INPUT_READ, _client_socket_handler, bconv);
+
+    /* Add to pending conversations list */
+    jdata->pending_conversations = g_slist_prepend(jdata->pending_conversations, bconv);
+
+    g_free(mbba);
+    return;
   }
+
+  /* Found matching buddy */
+  g_slist_free(mbba->matched_buddies);
   g_free(mbba);
 
   /* We've established that this *could* be from one of our buddies.
@@ -739,8 +766,8 @@ _server_socket_handler(gpointer data, int server_socket, PurpleInputCondition co
   /* We wait for the stream start before doing anything else */
   bconv->socket = client_socket;
   bconv->rx_handler = purple_input_add(client_socket, PURPLE_INPUT_READ, _client_socket_handler, bconv);
-
 }
+
 
 static int
 start_serversocket_listening(int port, int socket, struct sockaddr *addr, size_t addr_size, gboolean ip6, gboolean allow_port_fallback)
@@ -992,13 +1019,28 @@ bonjour_jabber_conv_match_by_name(BonjourJabberConversation *bconv)
   }
 }
 
-
-
-void
-bonjour_jabber_conv_match_by_ip(BonjourJabberConversation *bconv) {
+void bonjour_jabber_conv_match_by_ip(BonjourJabberConversation *bconv) {
   BonjourJabber *jdata = ((BonjourData*) bconv->account->gc->proto_data)->jabber_data;
   struct _match_buddies_by_address_t *mbba;
   GSList *buddies;
+
+  /* Normalize IPv6 address if needed */
+  if (bconv->ip && strchr(bconv->ip, ':')) {
+    /* This is an IPv6 address - normalize it */
+    char normalized_ip[INET6_ADDRSTRLEN];
+    struct in6_addr addr6;
+
+    if (inet_pton(AF_INET6, bconv->ip, &addr6) == 1) {
+      if (inet_ntop(AF_INET6, &addr6, normalized_ip, sizeof(normalized_ip))) {
+        /* Update the IP to normalized form */
+        g_free(bconv->ip);
+        bconv->ip = g_strdup(normalized_ip);
+        purple_debug_info("bonjour", "Normalized IPv6 address to: %s\n", bconv->ip);
+      }
+    }
+  }
+
+  purple_debug_info("bonjour", "Trying to match buddy by IP: %s\n", bconv->ip);
 
   mbba = g_new0(struct _match_buddies_by_address_t, 1);
   mbba->address = bconv->ip;
@@ -1007,42 +1049,77 @@ bonjour_jabber_conv_match_by_ip(BonjourJabberConversation *bconv) {
   g_slist_foreach(buddies, _match_buddies_by_address, mbba);
   g_slist_free(buddies);
 
-  /* If there is exactly one match, use it */
-  if(mbba->matched_buddies != NULL) {
-    if(mbba->matched_buddies->next != NULL)
-      purple_debug_error("bonjour", "More than one buddy matched for ip %s.\n", bconv->ip);
-    else {
-      PurpleBuddy *pb = mbba->matched_buddies->data;
-      BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
+  /* We've failed to match a buddy - give up */
+  if (mbba->matched_buddies == NULL) {
+    purple_debug_warning("bonjour", "Failed to match buddy by IP %s - keeping connection open for stream negotiation\n", bconv->ip);
+    g_free(mbba);
 
-      purple_debug_info("bonjour", "Matched buddy %s to incoming conversation using IP (%s)\n",
-        purple_buddy_get_name(pb), bconv->ip);
+    /* Don't close the connection yet - wait for stream header */
+    /* The buddy might be identified by the 'from' attribute in the stream */
+    return;
+  }
 
-      /* Attach conv. to buddy and remove from pending list */
-      jdata->pending_conversations = g_slist_remove(jdata->pending_conversations, bconv);
+  /* We've found our buddy */
+  GSList *buddies_in = mbba->matched_buddies;
+  while(buddies_in) {
+    PurpleBuddy *pb = buddies_in->data;
+    BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
 
-      /* Check if the buddy already has a conversation and, if so, replace it */
-      if (bb->conversation != NULL && bb->conversation != bconv)
-        bonjour_jabber_close_conversation(bb->conversation);
+    purple_debug_info("bonjour", "Matched buddy %s to incoming connection from %s\n",
+      purple_buddy_get_name(pb), bconv->ip);
 
-      bconv->pb = pb;
+    /* Check that we're not connecting to ourselves */
+    if (purple_strequal(purple_account_get_username(pb->account), pb->name)) {
+      purple_debug_info("bonjour", "We don't want to talk to ourselves\n");
+      /* We can't delete the bconv here, but we can unassociate ourselves from it */
+      bconv->pb = NULL;
+      g_slist_free(mbba->matched_buddies);
+      g_free(mbba);
+      return;
+    }
+
+    g_free(bconv->buddy_name);
+    bconv->buddy_name = NULL;
+
+    /* Inform the user that the conversation has been opened */
+    /* TODO: Check if it's correct to call bconv->pb->account or bconv->account */
+    bconv->pb = pb;
+    bb->conversation = bconv;
+
+    /* We've matched a buddy.  First, make sure we aren't already talking to this person elsewhere */
+    if(bb->conversation != NULL && bb->conversation != bconv) {
+      purple_debug_info("bonjour", "Matched buddy %s is already in a conversation.\n", purple_buddy_get_name(pb));
+      /* We can't delete the bconv here, but we can unassociate ourselves from it */
+      bconv->pb = NULL;
       bb->conversation = bconv;
     }
-  } else
-    purple_debug_error("bonjour", "No buddies matched for ip %s.\n", bconv->ip);
 
-  /* We've failed to match a buddy - give up */
-  if (bconv->pb == NULL) {
-    /* This must be asynchronous because it destroys the parser and we
-     * may be in the middle of parsing.
-     */
-    async_bonjour_jabber_close_conversation(bconv);
+    /* Break because we only want to match one buddy */
+    break;
+    buddies_in = buddies_in->next;
   }
 
   g_slist_free(mbba->matched_buddies);
   g_free(mbba);
-}
 
+  /* Remove from pending conversations if it was there */
+  if (jdata->pending_conversations) {
+    jdata->pending_conversations = g_slist_remove(jdata->pending_conversations, bconv);
+  }
+
+  /* We've associated the conversation with a buddy.  Yay! */
+  /* If the stream has been completely started and we know who we're talking to, we can start doing stuff. */
+  /* I don't think the circ_buffer can actually contain anything without a buddy being associated, but lets be explicit. */
+  if (bconv->sent_stream_start == FULLY_SENT && bconv->recv_stream_start && bconv->pb != NULL
+      && purple_circ_buffer_get_max_read(bconv->tx_buf) > 0) {
+    /* Watch for when we can write the buffered messages */
+    bconv->tx_handler = purple_input_add(bconv->socket, PURPLE_INPUT_WRITE,
+      _send_data_write_cb, bconv->pb);
+    /* We can probably write the data right now. */
+    _send_data_write_cb(bconv->pb, bconv->socket, PURPLE_INPUT_WRITE);
+  }
+
+}
 
 static PurpleBuddy *
 _find_or_start_conversation(BonjourJabber *jdata, const gchar *to)

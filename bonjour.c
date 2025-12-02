@@ -54,6 +54,126 @@ typedef struct {
   PurpleBuddy *buddy;
 } BarevAddBuddyData;
 
+static void bonjour_set_status(PurpleAccount *account, PurpleStatus *status);
+static void bonjour_login(PurpleAccount *account);
+
+/* Structure for parsing manual buddy format */
+typedef struct {
+  char *nick;
+  char *ipv6_address;
+  int port;
+} BarevBuddyInfo;
+
+/* Parse buddy string in format: nick or nick@ipv6_address */
+static BarevBuddyInfo *
+parse_barev_buddy_string(const char *buddy_str)
+{
+  BarevBuddyInfo *info;
+  char *at_sign;
+  char *str_copy;
+
+  if (!buddy_str || strlen(buddy_str) == 0)
+    return NULL;
+
+  info = g_new0(BarevBuddyInfo, 1);
+  str_copy = g_strdup(buddy_str);
+
+  /* Check for @ separator */
+  at_sign = strchr(str_copy, '@');
+  if (at_sign) {
+    /* Format: nick@ipv6 */
+    *at_sign = '\0';
+    info->nick = g_strdup(str_copy);
+    info->ipv6_address = g_strdup(at_sign + 1);
+
+    /* Remove port if specified after last : */
+    char *last_colon = strrchr(info->ipv6_address, ':');
+    if (last_colon && last_colon > info->ipv6_address) {
+      /* Check if this is a port (all digits after colon) */
+      char *p = last_colon + 1;
+      gboolean is_port = TRUE;
+      while (*p) {
+        if (!g_ascii_isdigit(*p)) {
+          is_port = FALSE;
+          break;
+        }
+        p++;
+      }
+      if (is_port && strlen(last_colon + 1) > 0 && strlen(last_colon + 1) < 6) {
+        info->port = atoi(last_colon + 1);
+        *last_colon = '\0';
+      } else {
+        info->port = 5298; /* Default Bonjour port */
+      }
+    } else {
+      info->port = 5298;
+    }
+  } else {
+    /* Just a nick - will need to add IP later */
+    info->nick = g_strdup(str_copy);
+    info->ipv6_address = NULL;
+    info->port = 5298;
+  }
+
+  g_free(str_copy);
+
+  purple_debug_info("bonjour", "Parsed Barev buddy: nick=%s, ipv6=%s, port=%d\n",
+    info->nick, info->ipv6_address ? info->ipv6_address : "(none)", info->port);
+
+  return info;
+}
+
+static gboolean
+barev_auto_connect_timer(gpointer data)
+{
+  PurpleConnection *gc = data;
+  BonjourData *bd;
+  GSList *buddies;
+
+  if (!PURPLE_CONNECTION_IS_CONNECTED(gc))
+    return FALSE; /* Stop timer if disconnected */
+
+  bd = gc->proto_data;
+  if (!bd || !bd->jabber_data)
+    return TRUE; /* Keep trying */
+
+  purple_debug_info("bonjour", "Barev: auto-connecting to buddies\n");
+
+  buddies = purple_find_buddies(gc->account, NULL);
+
+  for (GSList *l = buddies; l; l = l->next) {
+    PurpleBuddy *pb = l->data;
+    BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
+    const char *buddy_name = purple_buddy_get_name(pb);
+
+    if (!bb) {
+      purple_debug_info("bonjour", "Barev: buddy %s has no protocol data\n", buddy_name);
+      continue;
+    }
+
+    /* Skip if already connected */
+    if (bb->conversation && bb->conversation->socket >= 0) {
+      purple_debug_info("bonjour", "Barev: buddy %s already connected\n", buddy_name);
+      continue;
+    }
+
+    /* Skip if no IP addresses */
+    if (!bb->ips || !bb->ips->data) {
+      purple_debug_info("bonjour", "Barev: buddy %s has no IP addresses\n", buddy_name);
+      continue;
+    }
+
+    purple_debug_info("bonjour", "Barev: auto-connecting to %s\n", buddy_name);
+
+    /* Try to send a message to trigger connection */
+    /* Using the existing send_message function which will handle connection setup */
+    bonjour_jabber_send_message(bd->jabber_data, buddy_name, "<!-- ping -->");
+  }
+
+  g_slist_free(buddies);
+  return TRUE; /* Continue periodic attempts */
+}
+
 
 static gboolean barev_should_autoconnect_buddy(PurpleBuddy *buddy)
 {
@@ -280,42 +400,91 @@ static void barev_remove_contact(PurpleAccount *account, const char *name)
   g_free(filename);
 }
 
-static void barev_add_buddy_ok_cb(BarevAddBuddyData *data, PurpleRequestFields *fields)
+static void
+barev_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group)
 {
-  PurpleConnection *pc = data->pc;
-  PurpleBuddy *buddy = data->buddy;
-  PurpleAccount *account = purple_connection_get_account(pc);
   BonjourBuddy *bb;
-  const char *name = purple_buddy_get_name(buddy);
-  PurpleRequestField *f;
-  const char *ip, *port_str;
-  int port;
+  BarevBuddyInfo *info;
+  const char *buddy_name = purple_buddy_get_name(buddy);
 
-  f = purple_request_fields_get_field(fields, "ip");
-  ip = purple_request_field_string_get_value(f);
-  if (!ip || !*ip) {
-  purple_debug_error("bonjour", "No IP/hostname provided for buddy %s\n", name);
-  g_free(data);
-  return;
+  purple_debug_info("bonjour", "Barev: adding buddy %s\n", buddy_name);
+
+  /* Parse the buddy string */
+  info = parse_barev_buddy_string(buddy_name);
+  if (!info) {
+    purple_debug_error("bonjour", "Barev: failed to parse buddy string: %s\n", buddy_name);
+    return;
+  }
+
+  /* Create BonjourBuddy structure */
+  bb = g_new0(BonjourBuddy, 1);
+  bb->name = g_strdup(info->nick);
+  bb->account = gc->account;
+  bb->port_p2pj = info->port;
+
+  /* Set the IPv6 address if provided */
+  if (info->ipv6_address) {
+    bb->ips = g_slist_append(NULL, g_strdup(info->ipv6_address));
+    purple_debug_info("bonjour", "Barev: buddy %s has IPv6: %s\n",
+      info->nick, info->ipv6_address);
+  }
+
+  /* Set some default values */
+  bb->first = g_strdup(info->nick);
+  bb->last = g_strdup("");
+  bb->status = g_strdup("available");
+  bb->msg = g_strdup("");
+
+  /* Attach to buddy */
+  purple_buddy_set_protocol_data(buddy, bb);
+
+  /* If we have an IP, mark as available */
+  if (bb->ips) {
+    purple_prpl_got_user_status(gc->account, buddy_name, "available", NULL);
+  }
+
+  /* Cleanup */
+  g_free(info->nick);
+  g_free(info->ipv6_address);
+  g_free(info);
 }
 
-  f = purple_request_fields_get_field(fields, "port");
-  port_str = purple_request_field_string_get_value(f);
-  if (port_str && *port_str)
-    port = atoi(port_str);
-  else
-    port = purple_account_get_int(account, "port", BONJOUR_DEFAULT_PORT);
-
-  bb = bonjour_buddy_new(name, account);
-  bb->port_p2pj = port;
-  bb->ips = g_slist_append(NULL, g_strdup(ip));
-
-  bonjour_buddy_add_to_purple(bb, buddy);
-
-  barev_save_contact(bb);
-
-  g_free(data);
-}
+//static void barev_add_buddy_ok_cb(BarevAddBuddyData *data, PurpleRequestFields *fields)
+//{
+//  PurpleConnection *pc = data->pc;
+//  PurpleBuddy *buddy = data->buddy;
+//  PurpleAccount *account = purple_connection_get_account(pc);
+//  BonjourBuddy *bb;
+//  const char *name = purple_buddy_get_name(buddy);
+//  PurpleRequestField *f;
+//  const char *ip, *port_str;
+//  int port;
+//
+//  f = purple_request_fields_get_field(fields, "ip");
+//  ip = purple_request_field_string_get_value(f);
+//  if (!ip || !*ip) {
+//  purple_debug_error("bonjour", "No IP/hostname provided for buddy %s\n", name);
+//  g_free(data);
+//  return;
+//}
+//
+//  f = purple_request_fields_get_field(fields, "port");
+//  port_str = purple_request_field_string_get_value(f);
+//  if (port_str && *port_str)
+//    port = atoi(port_str);
+//  else
+//    port = purple_account_get_int(account, "port", BONJOUR_DEFAULT_PORT);
+//
+//  bb = bonjour_buddy_new(name, account);
+//  bb->port_p2pj = port;
+//  bb->ips = g_slist_append(NULL, g_strdup(ip));
+//
+//  bonjour_buddy_add_to_purple(bb, buddy);
+//
+//  barev_save_contact(bb);
+//
+//  g_free(data);
+//}
 
 
 
@@ -360,12 +529,78 @@ bonjour_removeallfromlocal(PurpleConnection *conn, PurpleGroup *bonjour_group)
 }
 
 static void
+bonjour_login_barev(PurpleAccount *account)
+{
+  PurpleConnection *gc = purple_account_get_connection(account);
+  BonjourData *bd;
+  PurpleStatus *status;
+  PurplePresence *presence;
+
+  bd = g_new0(BonjourData, 1);
+  purple_connection_set_protocol_data(gc, bd);
+
+  /* Start the Jabber server */
+  bd->jabber_data = g_new0(BonjourJabber, 1);
+  bd->jabber_data->port = purple_account_get_int(account, "port", BONJOUR_DEFAULT_PORT);
+  bd->jabber_data->account = account;
+
+  if (bonjour_jabber_start(bd->jabber_data) == -1) {
+    /* Send a message about the connection error */
+    purple_connection_error_reason(gc,
+        PURPLE_CONNECTION_ERROR_NETWORK_ERROR,
+        _("Unable to listen for incoming IM connections"));
+    return;
+  }
+
+  /* For Barev mode, we don't use mDNS */
+  purple_debug_info("bonjour", "Starting in Barev manual mode (no mDNS)\n");
+
+  /* Create a minimal dns_sd_data to prevent crashes */
+  bd->dns_sd_data = g_new0(BonjourDnsSd, 1);
+  bd->dns_sd_data->first = g_strdup(purple_account_get_string(account, "first", ""));
+  bd->dns_sd_data->last = g_strdup(purple_account_get_string(account, "last", ""));
+  /* Note: email field may not exist in your BonjourDnsSd structure */
+
+  /* Set our presence */
+  presence = purple_account_get_presence(account);
+  status = purple_presence_get_active_status(presence);
+  bonjour_set_status(account, status);
+
+  /* Set connection to connected */
+  purple_connection_set_state(gc, PURPLE_CONNECTED);
+
+  /* Add existing buddies with stored IPs */
+  GSList *buddies = purple_find_buddies(account, NULL);
+  for (GSList *l = buddies; l; l = l->next) {
+    PurpleBuddy *buddy = l->data;
+    if (!purple_buddy_get_protocol_data(buddy)) {
+      barev_add_buddy(gc, buddy, NULL);
+    }
+  }
+  g_slist_free(buddies);
+
+  /* Start auto-connect timer */
+  purple_timeout_add_seconds(30, barev_auto_connect_timer, gc);
+  /* Also try immediately after 5 seconds */
+  purple_timeout_add_seconds(5, barev_auto_connect_timer, gc);
+}
+
+
+
+static void
 bonjour_login(PurpleAccount *account)
 {
   PurpleConnection *gc = purple_account_get_connection(account);
   BonjourData *bd;
   PurpleStatus *status;
   PurplePresence *presence;
+
+/* Check if this is Barev mode */
+  const char *protocol_id = purple_account_get_protocol_id(account);
+  if (protocol_id && strstr(protocol_id, "barev")) {
+    bonjour_login_barev(account);
+    return;
+  }
 
 #ifdef _WIN32
   if (!dns_sd_available()) {
@@ -561,37 +796,53 @@ static void bonjour_set_status(PurpleAccount *account, PurpleStatus *status)
 //  purple_blist_remove_buddy(buddy);
 //}
 
-static void bonjour_add_buddy(PurpleConnection *pc, PurpleBuddy *buddy, PurpleGroup *group)
+static void
+bonjour_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group)
 {
-  PurpleAccount *account = purple_connection_get_account(pc);
-  PurpleRequestFields *fields;
-  PurpleRequestFieldGroup *grp;
-  PurpleRequestField *f;
-  BarevAddBuddyData *data = g_new0(BarevAddBuddyData, 1);
+  const char *protocol_id = purple_account_get_protocol_id(gc->account);
 
-  data->pc = pc;
-  data->buddy = buddy;
+  /* Check if this is Barev mode */
+  if (protocol_id && (strstr(protocol_id, "barev") || strstr(protocol_id, "prpl-barev"))) {
+    barev_add_buddy(gc, buddy, group);
+    return;
+  }
 
-  fields = purple_request_fields_new();
-  grp = purple_request_field_group_new(NULL);
-  purple_request_fields_add_group(fields, grp);
+  /* Standard Bonjour mode */
+  BonjourData *bd = purple_connection_get_protocol_data(gc);
+  BonjourBuddy *bb;
 
-  f = purple_request_field_string_new("ip", _("IP or hostname"), "", FALSE);
-  purple_request_field_group_add_field(grp, f);
+  if (purple_buddy_get_protocol_data(buddy) != NULL) {
+    return;
+  }
 
-  f = purple_request_field_string_new("port", _("Port (optional)"),
-                                      "", FALSE);
-  purple_request_field_group_add_field(grp, f);
+  /* Check if we have dns_sd_data - in Barev mode we might not */
+  if (!bd->dns_sd_data) {
+    purple_debug_warning("bonjour", "No DNS-SD data available\n");
+    return;
+  }
 
-  purple_request_fields(pc,
-                        _("Add Barev buddy"),
-                        _("Add Barev buddy"),
-                        _("Enter the IP/hostname and optional port for this buddy."),
-                        fields,
-                        _("Add"), G_CALLBACK(barev_add_buddy_ok_cb),
-                        _("Cancel"), NULL,
-                        account, NULL, NULL,
-                        data);
+  /* For standard Bonjour, we need different handling */
+  /* Since bonjour_buddy_check expects a BonjourBuddy, not BonjourDnsSd,
+   * we need to check if the buddy exists in discovery */
+
+  /* Create a minimal BonjourBuddy for the check */
+  bb = g_new0(BonjourBuddy, 1);
+  bb->name = g_strdup(purple_buddy_get_name(buddy));
+
+  /* Check if this buddy is valid for Bonjour */
+  if (!bonjour_buddy_check(bb)) {
+    purple_blist_remove_buddy(buddy);
+    g_free(bb->name);
+    g_free(bb);
+    return;
+  }
+
+  /* Clean up temporary buddy */
+  g_free(bb->name);
+  g_free(bb);
+
+  /* For standard Bonjour with mDNS, handle buddy list updates */
+  /* Note: The bonjourdnsssd member may not exist in your version */
 }
 
 
