@@ -97,10 +97,10 @@ parse_barev_buddy_string(const char *buddy_str)
   /* Extract IPv6 address */
   char *ipv6_start = at_sign + 1;
   info->ipv6_address = g_strdup(ipv6_start);
-  info->port = 5298; /* Default port */
+  info->port = BONJOUR_DEFAULT_PORT; /* Default port */
 
   /* Check for port at end (after last colon) - be careful with IPv6 */
-  /* Port format would be: nick@[ipv6]:port or nick@ipv6%5298 */
+  /* Port format would be: nick@[ipv6]:port or nick@ipv6%5299 */
 
   g_free(str_copy);
 
