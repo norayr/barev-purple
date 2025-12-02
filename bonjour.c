@@ -280,6 +280,14 @@ static void barev_load_contacts(PurpleAccount *account)
 
     bonjour_buddy_add_to_purple(bb, NULL);
 
+    PurpleBuddy *pb = purple_find_buddy(account, name);
+    if (pb) {
+      purple_prpl_got_user_status(account,
+                                  purple_buddy_get_name(pb),
+                                  BONJOUR_STATUS_ID_OFFLINE,
+                                  NULL);
+    }
+
     g_strfreev(parts);
   }
 
@@ -567,10 +575,12 @@ bonjour_login_barev(PurpleAccount *account)
                     bd->jabber_data->port);
 
   /* Minimal DNS-SD data (we don't use mDNS but some code expects this) */
-  bd->dns_sd_data = g_new0(BonjourDnsSd, 1);
-  bd->dns_sd_data->first   = g_strdup("");
-  bd->dns_sd_data->last    = g_strdup("");
+  //bd->dns_sd_data = g_new0(BonjourDnsSd, 1);
+  //bd->dns_sd_data->first   = g_strdup("");
+  //bd->dns_sd_data->last    = g_strdup("");
   //bd->dns_sd_data->account = account;
+  // no mdns
+  bd->dns_sd_data = NULL;
 
   purple_connection_set_state(gc, PURPLE_CONNECTED);
 
@@ -801,8 +811,16 @@ static void bonjour_set_status(PurpleAccount *account, PurpleStatus *status)
   const char *message, *bonjour_status;
   gchar *stripped;
 
+  if (!account)
+    return;
+
   gc = purple_account_get_connection(account);
+  if (!gc)
+    return;
   bd = gc->proto_data;
+    if(!bd || !bd->dns_sd_data)
+      return; // no mdns, nothing to broadcast
+
   presence = purple_account_get_presence(account);
 
   if (!bd || !bd->dns_sd_data)
