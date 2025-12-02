@@ -150,8 +150,8 @@ barev_auto_connect_timer(gpointer data)
     purple_debug_info("bonjour", "Barev: attempting connection to %s at %s\n",
                       who, (char*)bb->ips->data);
 
-    /* Send empty message to trigger connection */
-    bonjour_jabber_send_message(bd->jabber_data, who, "");
+    /* Just ensure a stream/connection exists */
+    bonjour_jabber_open_stream(bd->jabber_data, purple_buddy_get_name(pb));
   }
 
   g_slist_free(buddies);
@@ -385,76 +385,65 @@ static void barev_remove_contact(PurpleAccount *account, const char *name)
 static void
 barev_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group)
 {
-  BonjourBuddy *bb;
-  BarevBuddyInfo *info;
-  const char *full_buddy_name = purple_buddy_get_name(buddy);
+    BonjourBuddy *bb;
+    BarevBuddyInfo *info;
+    const char *full_buddy_name = purple_buddy_get_name(buddy);
 
-  purple_debug_info("bonjour", "Barev: adding buddy %s\n",
-                    full_buddy_name ? full_buddy_name : "(null)");
+    purple_debug_info("bonjour", "Barev: adding buddy %s\n", full_buddy_name);
 
-  if (!full_buddy_name || !*full_buddy_name)
-    return;
+    /* Parse buddy string - MUST be in format nick@ipv6 */
+    info = parse_barev_buddy_string(full_buddy_name);
+    if (!info) {
+        purple_debug_error("bonjour", "Failed to parse buddy %s - must be nick@ipv6\n",
+                           full_buddy_name);
+        purple_notify_error(gc, "Invalid Buddy Format",
+                            "Barev buddies must be in format: nick@ipv6_address",
+                            full_buddy_name);
+        return;
+    }
 
-  /* Already initialised? Then nothing to do. */
-  bb = purple_buddy_get_protocol_data(buddy);
-  if (bb) {
-    purple_debug_info("bonjour",
-                      "Barev: buddy %s already has protocol data, skipping\n",
-                      full_buddy_name);
-    return;
-  }
+    /* Create BonjourBuddy */
+    bb = g_new0(BonjourBuddy, 1);
 
-  /* Parse buddy string – MUST be in format nick@ipv6 */
-  info = parse_barev_buddy_string(full_buddy_name);
-  if (!info) {
-    purple_debug_error("bonjour",
-                       "Failed to parse buddy %s - must be nick@ipv6\n",
-                       full_buddy_name);
-    purple_notify_error(gc, "Invalid Buddy Format",
-                        "Barev buddies must be in format: nick@ipv6_address",
-                        full_buddy_name);
-    return;
-  }
+    /* Store full JID-like name in bb->name, so Jabber side uses the same string */
+    bb->name    = g_strdup(full_buddy_name);   /* e.g. "inky@201:..." */
+    bb->account = gc->account;
+    bb->port_p2pj = info->port;
 
-  /* Create BonjourBuddy */
-  bb = g_new0(BonjourBuddy, 1);
+    if (info->ipv6_address) {
+        bb->ips = g_slist_append(NULL, g_strdup(info->ipv6_address));
+        purple_debug_info("bonjour", "Barev: buddy %s has IPv6: %s\n",
+                          info->nick, info->ipv6_address);
+    } else {
+        purple_debug_error("bonjour", "Barev: buddy %s has no IPv6!\n", info->nick);
+    }
 
-  /* IMPORTANT: canonical name = full buddy name ("nick@ipv6") */
-  bb->name    = g_strdup(full_buddy_name);
-  bb->account = gc->account;
-  bb->port_p2pj = info->port;
+    /* Default metadata */
+    bb->first  = g_strdup(info->nick);
+    bb->last   = g_strdup("");
+    bb->status = g_strdup("offline");
+    bb->msg    = g_strdup("");
 
-  /* Store the IPv6 address (what we will actually connect to) */
-  if (info->ipv6_address) {
-    bb->ips = g_slist_append(NULL, g_strdup(info->ipv6_address));
-    purple_debug_info("bonjour",
-                      "Barev: buddy %s has IPv6: %s (port %d)\n",
-                      info->nick, info->ipv6_address, info->port);
-  } else {
-    purple_debug_error("bonjour",
-                       "Barev: buddy %s has no IPv6!\n", info->nick);
-  }
+    /* Attach to Purple buddy */
+    purple_buddy_set_protocol_data(buddy, bb);
 
-  /* Default metadata */
-  bb->first  = g_strdup(info->nick);
-  bb->last   = g_strdup("");
-  bb->status = g_strdup("offline");
-  bb->msg    = g_strdup("");
+    /* Human-friendly alias: just nick */
+    purple_blist_alias_buddy(buddy, info->nick);
 
-  /* Attach to buddy */
-  purple_buddy_set_protocol_data(buddy, bb);
+    /* Persist to barev-contacts-<account>.txt */
+    barev_save_contact(bb);
 
-  /* Display-only alias = plain nick */
-  purple_blist_alias_buddy(buddy, info->nick);
+    /* Do NOT mark them online here – we only do that when a stream is up */
+    purple_prpl_got_user_status(gc->account,
+                                full_buddy_name,
+                                BONJOUR_STATUS_ID_OFFLINE,
+                                NULL);
 
-  /* Persist to barev-contacts-<account>.txt */
-  barev_save_contact(bb);
-
-  /* Cleanup */
-  g_free(info->nick);
-  g_free(info->ipv6_address);
-  g_free(info);
+    g_free(info->nick);
+    g_free(info->ipv6_address);
+    g_free(info);
 }
+
 
 //static void barev_add_buddy_ok_cb(BarevAddBuddyData *data, PurpleRequestFields *fields)
 //{
@@ -553,6 +542,12 @@ bonjour_login_barev(PurpleAccount *account)
   bd = g_new0(BonjourData, 1);
   purple_connection_set_protocol_data(gc, bd);
 
+  const char *accname = purple_account_get_username(account);
+    if (!accname || !*accname)
+        accname = "barev";
+
+  bd->jid = g_strdup_printf("%s@barev.local", accname);
+
   bd->jabber_data = g_new0(BonjourJabber, 1);
   bd->jabber_data->account = account;
   bd->jabber_data->port =
@@ -563,6 +558,7 @@ bonjour_login_barev(PurpleAccount *account)
       PURPLE_CONNECTION_ERROR_NETWORK_ERROR,
       _("Unable to listen for incoming IM connections"));
     g_free(bd->jabber_data);
+    g_free(bd->jid);
     g_free(bd);
     return;
   }
@@ -574,7 +570,7 @@ bonjour_login_barev(PurpleAccount *account)
   bd->dns_sd_data = g_new0(BonjourDnsSd, 1);
   bd->dns_sd_data->first   = g_strdup("");
   bd->dns_sd_data->last    = g_strdup("");
-  bd->dns_sd_data->account = account;
+  //bd->dns_sd_data->account = account;
 
   purple_connection_set_state(gc, PURPLE_CONNECTED);
 

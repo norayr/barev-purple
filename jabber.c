@@ -85,6 +85,7 @@ enum sent_stream_start_types {
 static void
 xep_iq_parse(xmlnode *packet, PurpleBuddy *pb);
 
+
 static BonjourJabberConversation *
 bonjour_jabber_conv_new(PurpleBuddy *pb, PurpleAccount *account, const char *ip) {
 
@@ -632,18 +633,15 @@ void bonjour_jabber_stream_started(BonjourJabberConversation *bconv) {
       bconv->recv_stream_start &&
       bconv->pb) {
 
-    /* ===== NEW: mark buddy as ONLINE on successful stream start ===== */
     PurpleBuddy *pb = bconv->pb;
     PurpleAccount *account = bconv->account;
     BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
 
-        if (bb) {
-      bb->conversation = bconv;
-      const char *who = purple_buddy_get_name(pb);
-      purple_prpl_got_user_status(account,
-                                  who,
-                                  BONJOUR_STATUS_ID_AVAILABLE,
-                                  NULL);
+    if (bb) {
+            purple_prpl_got_user_status(account,
+                                        purple_buddy_get_name(pb),
+                                        BONJOUR_STATUS_ID_AVAILABLE,
+                                        NULL);
     }
 
     /* and now the original buffered-send code: */
@@ -1144,78 +1142,99 @@ _find_or_start_conversation(BonjourJabber *jdata, const gchar *to)
   return pb;
 }
 
-int bonjour_jabber_open_stream(BonjourJabber *jdata, const char *to)
+int
+bonjour_jabber_open_stream(BonjourJabber *jdata, const char *to)
 {
-  PurpleBuddy *pb;
-  BonjourBuddy *bb;
+    PurpleBuddy *pb;
+    BonjourBuddy *bb;
 
-  pb = _find_or_start_conversation(jdata, to);
-  if (!pb)
-    return 0;
+    pb = _find_or_start_conversation(jdata, to);
+    if (!pb)
+        return 0;
 
-  bb = purple_buddy_get_protocol_data(pb);
-  if (!bb)
-    return 0;
+    bb = purple_buddy_get_protocol_data(pb);
+    if (!bb)
+        return 0;
 
-  /* If a connection was needed, _find_or_start_conversation has already
-   * started purple_proxy_connect() and created bb->conversation.
-   * We don't need to send a message here.
-   */
-
-  return 1;
+    /* Stream start is handled automatically in _connected_to_buddy()
+     * via bonjour_jabber_send_stream_init(), so nothing else to do. */
+    return 1;
 }
-
 
 int
 bonjour_jabber_send_message(BonjourJabber *jdata, const gchar *to, const gchar *body)
 {
-  xmlnode *message_node, *node, *node2;
-  gchar *message, *xhtml;
-  PurpleBuddy *pb;
-  BonjourBuddy *bb;
-  int ret;
+    xmlnode *message_node, *node, *node2;
+    gchar *message = NULL, *xhtml = NULL;
+    PurpleBuddy *pb;
+    BonjourBuddy *bb;
+    int ret;
 
-  pb = _find_or_start_conversation(jdata, to);
-  if (pb == NULL || (bb = purple_buddy_get_protocol_data(pb)) == NULL) {
-    purple_debug_info("bonjour", "Can't send a message to an offline buddy (%s).\n", to);
-    /* You can not send a message to an offline buddy */
-    return -10000;
-  }
+    pb = _find_or_start_conversation(jdata, to);
+    if (pb == NULL || (bb = purple_buddy_get_protocol_data(pb)) == NULL) {
+        purple_debug_info("bonjour",
+                          "Can't send a message to an offline buddy (%s).\n", to);
+        /* You can not send a message to an offline buddy */
+        return -10000;
+    }
 
-  purple_markup_html_to_xhtml(body, &xhtml, &message);
+    /* Barev auto-connect and similar callers may pass an empty body.
+     * In that case, just ensure the stream/connection exists and return.
+     */
+    if (body == NULL || *body == '\0') {
+        purple_debug_info("bonjour",
+                          "Empty message body for %s – opening/keeping stream only.\n",
+                          to);
+        return 0;
+    }
 
-  message_node = xmlnode_new("message");
-  xmlnode_set_attrib(message_node, "to", bb->name);
-  xmlnode_set_attrib(message_node, "from", bonjour_get_jid(jdata->account));
-  xmlnode_set_attrib(message_node, "type", "chat");
+    purple_markup_html_to_xhtml(body, &xhtml, &message);
 
-  /* Enclose the message from the UI within a "font" node */
-  node = xmlnode_new_child(message_node, "body");
-  xmlnode_insert_data(node, message, strlen(message));
-  g_free(message);
+    if (message == NULL || *message == '\0') {
+        g_free(xhtml);
+        purple_debug_warning("bonjour",
+                             "Converted message for %s is empty; not sending.\n",
+                             to);
+        return 0;
+    }
 
-  node = xmlnode_new_child(message_node, "html");
-  xmlnode_set_namespace(node, "http://www.w3.org/1999/xhtml");
+    message_node = xmlnode_new("message");
+    xmlnode_set_attrib(message_node, "to", bb->name ? bb->name : "");
 
-  node = xmlnode_new_child(node, "body");
-  message = g_strdup_printf("<font>%s</font>", xhtml);
-  node2 = xmlnode_from_str(message, strlen(message));
-  g_free(xhtml);
-  g_free(message);
-  xmlnode_insert_child(node, node2);
+    /* Ensure we never pass NULL to xmlnode_set_attrib */
+    const char *from = bonjour_get_jid(jdata->account);
+    if (!from)
+        from = "";
+    xmlnode_set_attrib(message_node, "from", from);
+    xmlnode_set_attrib(message_node, "type", "chat");
 
-  node = xmlnode_new_child(message_node, "x");
-  xmlnode_set_namespace(node, "jabber:x:event");
-  xmlnode_insert_child(node, xmlnode_new("composing"));
+    /* Enclose the message from the UI within a "body" node */
+    node = xmlnode_new_child(message_node, "body");
+    xmlnode_insert_data(node, message, strlen(message));
+    g_free(message);
 
-  message = xmlnode_to_str(message_node, NULL);
-  xmlnode_free(message_node);
+    node = xmlnode_new_child(message_node, "html");
+    xmlnode_set_namespace(node, "http://www.w3.org/1999/xhtml");
 
-  ret = _send_data(pb, message) >= 0;
+    node = xmlnode_new_child(node, "body");
+    message = g_strdup_printf("<font>%s</font>", xhtml);
+    node2 = xmlnode_from_str(message, strlen(message));
+    g_free(xhtml);
+    g_free(message);
+    xmlnode_insert_child(node, node2);
 
-  g_free(message);
+    node = xmlnode_new_child(message_node, "x");
+    xmlnode_set_namespace(node, "jabber:x:event");
+    xmlnode_insert_child(node, xmlnode_new("composing"));
 
-  return ret;
+    message = xmlnode_to_str(message_node, NULL);
+    xmlnode_free(message_node);
+
+    ret = (_send_data(pb, message) >= 0);
+
+    g_free(message);
+
+    return ret;
 }
 
 static gboolean
@@ -1257,11 +1276,11 @@ bonjour_jabber_close_conversation(BonjourJabberConversation *bconv)
       BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
 
       if (bb && bb->conversation == bconv) {
-        const char *who = purple_buddy_get_name(pb);
         purple_prpl_got_user_status(account,
-                                    who,
-                                    BONJOUR_STATUS_ID_OFFLINE,
-                                    NULL);
+                                            purple_buddy_get_name(pb),
+                                            BONJOUR_STATUS_ID_OFFLINE,
+                                            NULL);
+
         /* We do NOT have to clear bb->conversation here; async_close and
          * the callers already handle that safely.
          */
