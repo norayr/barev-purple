@@ -950,43 +950,60 @@ _connected_to_buddy(gpointer data, gint source, const gchar *error)
 void
 bonjour_jabber_conv_match_by_name(BonjourJabberConversation *bconv)
 {
-  PurpleBuddy *pb = NULL;
-  BonjourBuddy *bb = NULL;
-  BonjourJabber *jdata;
+    PurpleBuddy *pb = NULL;
+    BonjourBuddy *bb = NULL;
+    BonjourJabber *jdata;
 
-  g_return_if_fail(bconv->ip != NULL);
-  g_return_if_fail(bconv->pb == NULL);
+    g_return_if_fail(bconv->ip != NULL);
 
-  pb = purple_find_buddy(bconv->account, bconv->buddy_name);
-  if (pb && (bb = purple_buddy_get_protocol_data(pb))) {
-    jdata = ((BonjourData*) bconv->account->gc->proto_data)->jabber_data;
-
-    purple_debug_info("bonjour",
-      "Matched buddy %s to incoming conversation \"from\" attrib "
-      "(Barev manual mode, not checking IP; conv IP=%s)\n",
-      purple_buddy_get_name(pb),
-      bconv->ip ? bconv->ip : "(null)");
-
-    /* Attach conv. to buddy and remove from pending list */
-    jdata->pending_conversations =
-        g_slist_remove(jdata->pending_conversations, bconv);
-
-    /* If the buddy already has a conversation, replace it */
-    if (bb->conversation != NULL && bb->conversation != bconv)
-      bonjour_jabber_close_conversation(bb->conversation);
-
-    bconv->pb = pb;
-    bb->conversation = bconv;
-  }
-
-  /* We've failed to match a buddy - give up */
-  if (bconv->pb == NULL) {
-    /* This must be asynchronous because it destroys the parser and we
-     * may be in the middle of parsing.
+    /* If we already matched this conversation to a buddy (e.g. by IP),
+     * there is nothing more to do.
      */
-    async_bonjour_jabber_close_conversation(bconv);
-  }
+    if (bconv->pb != NULL)
+        return;
+
+    if (bconv->buddy_name) {
+        pb = purple_find_buddy(bconv->account, bconv->buddy_name);
+    }
+
+    if (pb && (bb = purple_buddy_get_protocol_data(pb))) {
+        jdata = ((BonjourData*) bconv->account->gc->proto_data)->jabber_data;
+
+        purple_debug_info("bonjour",
+            "Matched buddy %s to incoming conversation \"from\" attrib "
+            "(buddy_name=%s, conv IP=%s)\n",
+            purple_buddy_get_name(pb),
+            bconv->buddy_name ? bconv->buddy_name : "(null)",
+            bconv->ip ? bconv->ip : "(null)");
+
+        /* Attach conv. to buddy and remove from pending list */
+        jdata->pending_conversations =
+            g_slist_remove(jdata->pending_conversations, bconv);
+
+        /* If the buddy already has a conversation, replace it */
+        if (bb->conversation != NULL && bb->conversation != bconv)
+            bonjour_jabber_close_conversation(bb->conversation);
+
+        bconv->pb = pb;
+        bb->conversation = bconv;
+        return;
+    }
+
+    /* No buddy by name – try matching by IP instead. */
+    purple_debug_warning("bonjour",
+        "conv_match_by_name: no buddy named \"%s\"; trying IP match for %s\n",
+        bconv->buddy_name ? bconv->buddy_name : "(null)",
+        bconv->ip ? bconv->ip : "(no ip)");
+
+    bonjour_jabber_conv_match_by_ip(bconv);
+
+    /* IMPORTANT: Do NOT close the conversation here if still unmatched.
+     * We keep the stream open so that Barev can still talk to unknown peers,
+     * or we might match later using IP or additional information.
+     */
 }
+
+
 
 void bonjour_jabber_conv_match_by_ip(BonjourJabberConversation *bconv) {
   BonjourJabber *jdata = ((BonjourData*) bconv->account->gc->proto_data)->jabber_data;
