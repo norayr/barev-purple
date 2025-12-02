@@ -389,7 +389,7 @@ void
 bonjour_jabber_stream_ended(BonjourJabberConversation *bconv)
 {
   BonjourBuddy *bb = NULL;
-  const char *name = NULL;
+  /* REMOVED: const char *name = NULL; */
 
   purple_debug_info("bonjour", "Received conversation close notification from %s\n",
     bconv->pb ? purple_buddy_get_name(bconv->pb) :
@@ -397,23 +397,12 @@ bonjour_jabber_stream_ended(BonjourJabberConversation *bconv)
 
   if(bconv->pb != NULL)
     bb = purple_buddy_get_protocol_data(bconv->pb);
-#if 0
-  if(bconv->pb != NULL) {
-    PurpleConversation *conv;
-    conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_IM, bconv->pb->name, bconv->pb->account);
-    if (conv != NULL) {
-      char *tmp = g_strdup_printf(_("%s has closed the conversation."), bconv->pb->name);
-      purple_conversation_write(conv, NULL, tmp, PURPLE_MESSAGE_SYSTEM, time(NULL));
-      g_free(tmp);
-    }
-  }
-#endif
+
   /* Close the socket, clear the watcher and free memory */
   bonjour_jabber_close_conversation(bconv);
   if(bb)
     bb->conversation = NULL;
 }
-
 
 static void
 _client_socket_handler(gpointer data, gint socket, PurpleInputCondition condition)

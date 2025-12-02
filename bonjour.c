@@ -531,49 +531,62 @@ bonjour_removeallfromlocal(PurpleConnection *conn, PurpleGroup *bonjour_group)
 static void
 bonjour_login_barev(PurpleAccount *account)
 {
-  PurpleConnection *gc = purple_account_get_connection(account);
+  PurpleConnection *gc;
   BonjourData *bd;
-  PurpleStatus *status;
-  PurplePresence *presence;
 
+  /* Safety checks */
+  g_return_if_fail(account != NULL);
+
+  gc = purple_account_get_connection(account);
+  g_return_if_fail(gc != NULL);
+
+  purple_debug_info("bonjour", "=== BAREV MODE STARTUP ===\n");
+  purple_debug_info("bonjour", "Account: %s\n", purple_account_get_username(account));
+
+  /* Allocate data structures */
   bd = g_new0(BonjourData, 1);
   purple_connection_set_protocol_data(gc, bd);
 
-  /* Start the Jabber server */
+  /* Initialize Jabber data */
   bd->jabber_data = g_new0(BonjourJabber, 1);
-  bd->jabber_data->port = purple_account_get_int(account, "port", BONJOUR_DEFAULT_PORT);
   bd->jabber_data->account = account;
+  bd->jabber_data->port = purple_account_get_int(account, "port", BONJOUR_DEFAULT_PORT);
 
+  /* Start listening for connections */
   if (bonjour_jabber_start(bd->jabber_data) == -1) {
-    /* Send a message about the connection error */
+    purple_debug_error("bonjour", "Failed to start Jabber listener\n");
     purple_connection_error_reason(gc,
-        PURPLE_CONNECTION_ERROR_NETWORK_ERROR,
-        _("Unable to listen for incoming IM connections"));
+      PURPLE_CONNECTION_ERROR_NETWORK_ERROR,
+      _("Unable to listen for incoming IM connections"));
+    g_free(bd->jabber_data);
+    g_free(bd);
     return;
   }
 
-  /* For Barev mode, we don't use mDNS */
-  purple_debug_info("bonjour", "Starting in Barev manual mode (no mDNS)\n");
+  purple_debug_info("bonjour", "Jabber listener started on port %d\n",
+    bd->jabber_data->port);
 
-  /* Create a minimal dns_sd_data to prevent crashes */
+  /* Create minimal DNS-SD data (required even though we don't use mDNS) */
   bd->dns_sd_data = g_new0(BonjourDnsSd, 1);
-  bd->dns_sd_data->first = g_strdup(purple_account_get_string(account, "first", ""));
-  bd->dns_sd_data->last = g_strdup(purple_account_get_string(account, "last", ""));
-  /* Note: email field may not exist in your BonjourDnsSd structure */
+  bd->dns_sd_data->first = g_strdup("");
+  bd->dns_sd_data->last = g_strdup("");
+  /* Don't set email - it doesn't exist in the structure */
 
-  /* Set our presence */
-  presence = purple_account_get_presence(account);
-  status = purple_presence_get_active_status(presence);
-  bonjour_set_status(account, status);
-
-  /* Set connection to connected */
+  /* Mark as connected */
   purple_connection_set_state(gc, PURPLE_CONNECTED);
 
-  /* Add existing buddies with stored IPs */
+  purple_debug_info("bonjour", "=== BAREV MODE READY ===\n");
+
+  /* Load existing buddies */
   GSList *buddies = purple_find_buddies(account, NULL);
+  purple_debug_info("bonjour", "Found %d existing buddies\n",
+    g_slist_length(buddies));
+
   for (GSList *l = buddies; l; l = l->next) {
     PurpleBuddy *buddy = l->data;
     if (!purple_buddy_get_protocol_data(buddy)) {
+      const char *buddy_name = purple_buddy_get_name(buddy);
+      purple_debug_info("bonjour", "Initializing buddy: %s\n", buddy_name);
       barev_add_buddy(gc, buddy, NULL);
     }
   }
@@ -581,11 +594,8 @@ bonjour_login_barev(PurpleAccount *account)
 
   /* Start auto-connect timer */
   purple_timeout_add_seconds(30, barev_auto_connect_timer, gc);
-  /* Also try immediately after 5 seconds */
-  purple_timeout_add_seconds(5, barev_auto_connect_timer, gc);
+  purple_debug_info("bonjour", "Auto-connect timer started (30s)\n");
 }
-
-
 
 static void
 bonjour_login(PurpleAccount *account)
@@ -594,6 +604,19 @@ bonjour_login(PurpleAccount *account)
   BonjourData *bd;
   PurpleStatus *status;
   PurplePresence *presence;
+
+  g_return_if_fail(account != NULL);
+  gc = purple_account_get_connection(account);
+  g_return_if_fail(gc != NULL);
+
+  /* Check if this is Barev mode FIRST before doing anything else */
+  const char *username = purple_account_get_username(account);
+  if (username && strstr(username, "@")) {
+    /* This looks like a Barev buddy format (nick@ipv6), use Barev mode */
+    purple_debug_info("bonjour", "Detected Barev mode from username format\n");
+    bonjour_login_barev(account);
+    return;
+  }
 
 /* Check if this is Barev mode */
   const char *protocol_id = purple_account_get_protocol_id(account);
