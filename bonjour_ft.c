@@ -19,6 +19,12 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301,  USA
  */
+#include <errno.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
 #include "internal.h"
 #include "util.h"
 #include "debug.h"
@@ -924,8 +930,7 @@ bonjour_bytestreams_listen(int sock, gpointer data)
         return;
     }
 
-    xfer->watcher = purple_input_add(sock, PURPLE_INPUT_READ,
-                                     bonjour_sock5_request_cb, xfer);
+    /* Watcher is now created in bonjour_bytestreams_init() for Barev */
     xf = (XepXfer*)xfer->data;
     xf->listen_data = NULL;
 
@@ -978,21 +983,75 @@ bonjour_bytestreams_listen(int sock, gpointer data)
 static void
 bonjour_bytestreams_init(PurpleXfer *xfer)
 {
-  XepXfer *xf;
-  if(xfer == NULL)
-    return;
+    XepXfer *xf;
+    int sock;
+    struct sockaddr_in6 addr6;
+    socklen_t addrlen;
+    guint16 port;
 
-  purple_debug_info("bonjour", "Bonjour-bytestreams-init.\n");
-  xf = xfer->data;
+    if (xfer == NULL)
+        return;
 
-  purple_network_listen_map_external(FALSE);
-  xf->listen_data = purple_network_listen_range(0, 0, SOCK_STREAM,
-                  bonjour_bytestreams_listen, xfer);
-  purple_network_listen_map_external(TRUE);
-  if (xf->listen_data == NULL)
-    purple_xfer_cancel_local(xfer);
+    purple_debug_info("bonjour", "Bonjour-bytestreams-init (Barev IPv6).\n");
 
-  return;
+    xf = xfer->data;
+    if (xf == NULL) {
+        purple_debug_error("bonjour", "Barev: bytestreams_init called with NULL XepXfer\n");
+        return;
+    }
+
+    sock = socket(AF_INET6, SOCK_STREAM, 0);
+    if (sock < 0) {
+        purple_debug_error("bonjour", "Barev: failed to create IPv6 socket for bytestream: %s\n",
+                           g_strerror(errno));
+        purple_xfer_cancel_local(xfer);
+        return;
+    }
+
+    memset(&addr6, 0, sizeof(addr6));
+    addr6.sin6_family = AF_INET6;
+    addr6.sin6_addr = in6addr_any;   /* listen on all IPv6 addresses */
+    addr6.sin6_port = 0;             /* let kernel choose port */
+
+    if (bind(sock, (struct sockaddr *)&addr6, sizeof(addr6)) < 0) {
+        purple_debug_error("bonjour", "Barev: bind() failed for bytestream: %s\n",
+                           g_strerror(errno));
+        close(sock);
+        purple_xfer_cancel_local(xfer);
+        return;
+    }
+
+    if (listen(sock, 1) < 0) {
+        purple_debug_error("bonjour", "Barev: listen() failed for bytestream: %s\n",
+                           g_strerror(errno));
+        close(sock);
+        purple_xfer_cancel_local(xfer);
+        return;
+    }
+
+    addrlen = sizeof(addr6);
+    if (getsockname(sock, (struct sockaddr *)&addr6, &addrlen) < 0) {
+        purple_debug_error("bonjour", "Barev: getsockname() failed for bytestream: %s\n",
+                           g_strerror(errno));
+        close(sock);
+        purple_xfer_cancel_local(xfer);
+        return;
+    }
+
+    port = ntohs(addr6.sin6_port);
+    xfer->local_port = port;
+    xf->listen_data = NULL;  /* we no longer use purple_network_listen_range */
+
+    purple_debug_info("bonjour",
+                      "Barev: listening for bytestream on IPv6 [::]:%hu (sock=%d)\n",
+                      port, sock);
+
+    /* Accept SOCKS5 connections on this socket */
+    xfer->watcher = purple_input_add(sock, PURPLE_INPUT_READ,
+                                     bonjour_sock5_request_cb, xfer);
+
+    /* Now advertise this streamhost to the peer */
+    bonjour_bytestreams_listen(sock, xfer);
 }
 
 static void
