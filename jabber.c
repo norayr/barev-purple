@@ -1638,78 +1638,71 @@ bonjour_jabber_get_local_ips(int fd)
   int ret;
 
 #ifdef HAVE_GETIFADDRS /* This is required for IPv6 */
-  {
-  struct ifaddrs *ifap, *ifa;
-  struct sockaddr *addr;
-  char addrstr[INET6_ADDRSTRLEN];
+    {
+        struct ifaddrs *ifap = NULL, *ifa;
+        int ret;
+        GSList *ygg_ips = NULL;
+        GSList *other_v6 = NULL;
+        GSList *v4_ips = NULL;
 
-  ret = getifaddrs(&ifap);
-  if (ret != 0) {
-    const char *error = g_strerror(errno);
-    purple_debug_error("bonjour", "getifaddrs() error: %s\n", error ? error : "(null)");
-    return NULL;
-  }
+        ret = getifaddrs(&ifap);
+        if (ret != 0) {
+            const char *error = g_strerror(errno);
+            purple_debug_error("bonjour", "getifaddrs() error: %s\n",
+                               error ? error : "(null)");
+            return NULL;
+        }
 
-//  for (ifa = ifap; ifa != NULL; ifa = ifa->ifa_next) {
-//    if (!(ifa->ifa_flags & IFF_RUNNING) || (ifa->ifa_flags & IFF_LOOPBACK) || ifa->ifa_addr == NULL)
-//      continue;
-//
-//    addr = ifa->ifa_addr;
-//    address_text = NULL;
-//    switch (addr->sa_family) {
-//      case AF_INET:
-//        address_text = inet_ntop(addr->sa_family, &((struct sockaddr_in *)addr)->sin_addr,
-//          addrstr, sizeof(addrstr));
-//        break;
-//#ifdef PF_INET6
-//      case AF_INET6:
-//        address_text = inet_ntop(addr->sa_family, &((struct sockaddr_in6 *)addr)->sin6_addr,
-//          addrstr, sizeof(addrstr));
-//        break;
-//#endif
-//    }
-//
-//    if (address_text != NULL) {
-//      if (addr->sa_family == AF_INET)
-//        ips = g_slist_append(ips, g_strdup(address_text));
-//      else
-//        ips = g_slist_prepend(ips, g_strdup(address_text));
-//    }
-//  }
-for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
-    struct sockaddr *addr = ifa->ifa_addr;
-    char host[NI_MAXHOST];
-    int family;
+        for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
+            struct sockaddr *sa = ifa->ifa_addr;
+            char host[NI_MAXHOST];
 
-    if (!addr)
-        continue;
+            if (!sa)
+                continue;
 
-    family = addr->sa_family;
+            /* must be up, not loopback */
+            if (!(ifa->ifa_flags & IFF_UP) || (ifa->ifa_flags & IFF_LOOPBACK))
+                continue;
 
-    /* For Barev/Yggdrasil we only want IPv6.
-     * This completely disables IPv4 (e.g. 192.168.x.x) for FT.
-     */
-    if (family == AF_INET)
-        continue;
+            if (sa->sa_family == AF_INET6) {
+                struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)sa;
 
-    if (family == AF_INET6) {
-        if (getnameinfo(addr, sizeof(struct sockaddr_in6),
-                        host, sizeof(host),
-                        NULL, 0, NI_NUMERICHOST) != 0)
-            continue;
+                if (getnameinfo(sa, sizeof(*sin6),
+                                host, sizeof(host),
+                                NULL, 0, NI_NUMERICHOST) != 0)
+                    continue;
 
-        /* skip link-local addresses */
-        if (g_str_has_prefix(host, "fe80:"))
-            continue;
+                /* skip link-local and loopback */
+                if (g_str_has_prefix(host, "fe80:") ||
+                    g_str_has_prefix(host, "::1"))
+                    continue;
 
-        /* IPv6 first */
-        ips = g_slist_prepend(ips, g_strdup(host));
+                /* Prefer Yggdrasil-style addresses: 201:... */
+                if (g_str_has_prefix(host, "201:")) {
+                    ygg_ips = g_slist_prepend(ygg_ips, g_strdup(host));
+                } else {
+                    /* non-Ygg IPv6 */
+                    other_v6 = g_slist_prepend(other_v6, g_strdup(host));
+                }
+            } else if (sa->sa_family == AF_INET) {
+                struct sockaddr_in *sin4 = (struct sockaddr_in *)sa;
+
+                if (getnameinfo(sa, sizeof(*sin4),
+                                host, sizeof(host),
+                                NULL, 0, NI_NUMERICHOST) != 0)
+                    continue;
+
+                /* skip 127.0.0.0/8 etc. if you want, but for now keep them */
+                v4_ips = g_slist_prepend(v4_ips, g_strdup(host));
+            }
+        }
+
+        freeifaddrs(ifap);
+
+        /* final order: Ygg IPv6 first, then other IPv6, then IPv4 */
+        ips = g_slist_concat(ygg_ips, other_v6);
+        ips = g_slist_concat(ips, v4_ips);
     }
-}
-
-  freeifaddrs(ifap);
-
-  }
 #else
   {
   char *tmp;
@@ -1751,6 +1744,9 @@ for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
   }
 #endif
 
+    if (ips == NULL)
+        purple_debug_info("bonjour",
+                          "bonjour_jabber_get_local_ips: no local IPs found\n");
   return ips;
 }
 

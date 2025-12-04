@@ -575,15 +575,6 @@ bonjour_login_barev(PurpleAccount *account)
   purple_debug_info("bonjour", "Account: %s\n",
                     purple_account_get_username(account));
 
-  //bd = g_new0(BonjourData, 1);
-  //purple_connection_set_protocol_data(gc, bd);
-
-  //const char *accname = purple_account_get_username(account);
-  //  if (!accname || !*accname)
-  //      accname = "barev";
-
-  //bd->jid = g_strdup_printf("%s@barev.local", accname);
-
   bd = g_new0(BonjourData, 1);
   purple_connection_set_protocol_data(gc, bd);
 

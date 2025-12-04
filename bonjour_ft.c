@@ -910,68 +910,69 @@ bonjour_sock5_request_cb(gpointer data, gint source, PurpleInputCondition cond)
 static void
 bonjour_bytestreams_listen(int sock, gpointer data)
 {
-  PurpleXfer *xfer = data;
-  XepXfer *xf;
-  XepIq *iq;
-  xmlnode *query, *streamhost;
-  gchar *port;
-  GSList *local_ips;
-  BonjourData *bd;
+    PurpleXfer *xfer = data;
+    XepXfer *xf;
+    XepIq *iq;
+    xmlnode *query, *streamhost;
+    gchar *port;
+    GSList *local_ips, *l;
+    BonjourData *bd;
 
-  purple_debug_info("bonjour", "Bonjour-bytestreams-listen. sock=%d.\n", sock);
-  if (sock < 0 || xfer == NULL) {
-    /*purple_xfer_cancel_local(xfer);*/
-    return;
-  }
+    purple_debug_info("bonjour", "Bonjour-bytestreams-listen. sock=%d.\n", sock);
+    if (sock < 0 || xfer == NULL) {
+        /*purple_xfer_cancel_local(xfer);*/
+        return;
+    }
 
-  xfer->watcher = purple_input_add(sock, PURPLE_INPUT_READ,
-           bonjour_sock5_request_cb, xfer);
-  xf = (XepXfer*)xfer->data;
-  xf->listen_data = NULL;
+    xfer->watcher = purple_input_add(sock, PURPLE_INPUT_READ,
+                                     bonjour_sock5_request_cb, xfer);
+    xf = (XepXfer*)xfer->data;
+    xf->listen_data = NULL;
 
-  bd = xf->data;
+    bd = xf->data;
 
-  iq = xep_iq_new(bd, XEP_IQ_SET, xfer->who, bonjour_get_jid(bd->jabber_data->account), xf->sid);
+    iq = xep_iq_new(bd, XEP_IQ_SET,
+                    xfer->who,
+                    bonjour_get_jid(bd->jabber_data->account),
+                    xf->sid);
 
-  query = xmlnode_new_child(iq->node, "query");
-  xmlnode_set_namespace(query, "http://jabber.org/protocol/bytestreams");
-  xmlnode_set_attrib(query, "sid", xf->sid);
-  xmlnode_set_attrib(query, "mode", "tcp");
+    query = xmlnode_new_child(iq->node, "query");
+    xmlnode_set_namespace(query, "http://jabber.org/protocol/bytestreams");
+    xmlnode_set_attrib(query, "sid", xf->sid);
+    xmlnode_set_attrib(query, "mode", "tcp");
 
     xfer->local_port = purple_network_get_port_from_fd(sock);
 
+    /* Get local IPs (Ygg first, then others) */
+    local_ips = bonjour_jabber_get_local_ips(sock);
     port = g_strdup_printf("%hu", (guint16)purple_xfer_get_local_port(xfer));
 
-    /* Use our own JID's domain (nick@IPv6) as the only streamhost address */
-    {
-        const char *jid = bonjour_get_jid(bd->jabber_data->account);
-        const char *at = jid ? strchr(jid, '@') : NULL;
-        const char *self_ip = (at && *(at + 1)) ? (at + 1) : NULL;
-
-        if (self_ip) {
-            streamhost = xmlnode_new_child(query, "streamhost");
-            xmlnode_set_attrib(streamhost, "jid", xf->sid);
-            xmlnode_set_attrib(streamhost, "host", self_ip);
-            xmlnode_set_attrib(streamhost, "port", port);
+    if (!local_ips) {
+        purple_debug_warning("bonjour",
+                             "bytestreams-listen: no local IPs found, "
+                             "not advertising any streamhost\n");
+    } else {
+        for (l = local_ips; l; l = l->next) {
+            const char *ip = l->data;
 
             purple_debug_info("bonjour",
-                              "bytestream offer: using self_ip=%s port=%s as streamhost\n",
-                              self_ip, port);
-        } else {
-            purple_debug_error("bonjour",
-                               "bytestream offer: unable to determine self_ip from JID '%s'\n",
-                               jid ? jid : "(null)");
+                              "bytestream offer: advertising host=%s port=%s\n",
+                              ip, port);
+
+            streamhost = xmlnode_new_child(query, "streamhost");
+
+            /* The jid here is supposed to identify the streamhost (us) */
+            xmlnode_set_attrib(streamhost, "jid",
+                               bonjour_get_jid(bd->jabber_data->account));
+            xmlnode_set_attrib(streamhost, "host", ip);
+            xmlnode_set_attrib(streamhost, "port", port);
         }
     }
 
+    g_slist_free_full(local_ips, g_free);
     g_free(port);
 
     xep_iq_send_and_free(iq);
-
-
-
-
-  xep_iq_send_and_free(iq);
 }
 
 static void
