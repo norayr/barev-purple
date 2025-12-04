@@ -1643,32 +1643,62 @@ bonjour_jabber_get_local_ips(int fd)
     return NULL;
   }
 
-  for (ifa = ifap; ifa != NULL; ifa = ifa->ifa_next) {
-    if (!(ifa->ifa_flags & IFF_RUNNING) || (ifa->ifa_flags & IFF_LOOPBACK) || ifa->ifa_addr == NULL)
-      continue;
+//  for (ifa = ifap; ifa != NULL; ifa = ifa->ifa_next) {
+//    if (!(ifa->ifa_flags & IFF_RUNNING) || (ifa->ifa_flags & IFF_LOOPBACK) || ifa->ifa_addr == NULL)
+//      continue;
+//
+//    addr = ifa->ifa_addr;
+//    address_text = NULL;
+//    switch (addr->sa_family) {
+//      case AF_INET:
+//        address_text = inet_ntop(addr->sa_family, &((struct sockaddr_in *)addr)->sin_addr,
+//          addrstr, sizeof(addrstr));
+//        break;
+//#ifdef PF_INET6
+//      case AF_INET6:
+//        address_text = inet_ntop(addr->sa_family, &((struct sockaddr_in6 *)addr)->sin6_addr,
+//          addrstr, sizeof(addrstr));
+//        break;
+//#endif
+//    }
+//
+//    if (address_text != NULL) {
+//      if (addr->sa_family == AF_INET)
+//        ips = g_slist_append(ips, g_strdup(address_text));
+//      else
+//        ips = g_slist_prepend(ips, g_strdup(address_text));
+//    }
+//  }
+for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
+    struct sockaddr *addr = ifa->ifa_addr;
+    char host[NI_MAXHOST];
+    int family;
 
-    addr = ifa->ifa_addr;
-    address_text = NULL;
-    switch (addr->sa_family) {
-      case AF_INET:
-        address_text = inet_ntop(addr->sa_family, &((struct sockaddr_in *)addr)->sin_addr,
-          addrstr, sizeof(addrstr));
-        break;
-#ifdef PF_INET6
-      case AF_INET6:
-        address_text = inet_ntop(addr->sa_family, &((struct sockaddr_in6 *)addr)->sin6_addr,
-          addrstr, sizeof(addrstr));
-        break;
-#endif
-    }
+    if (!addr)
+        continue;
 
-    if (address_text != NULL) {
-      if (addr->sa_family == AF_INET)
-        ips = g_slist_append(ips, g_strdup(address_text));
-      else
-        ips = g_slist_prepend(ips, g_strdup(address_text));
+    family = addr->sa_family;
+
+    /* For Barev/Yggdrasil we only want IPv6.
+     * This completely disables IPv4 (e.g. 192.168.x.x) for FT.
+     */
+    if (family == AF_INET)
+        continue;
+
+    if (family == AF_INET6) {
+        if (getnameinfo(addr, sizeof(struct sockaddr_in6),
+                        host, sizeof(host),
+                        NULL, 0, NI_NUMERICHOST) != 0)
+            continue;
+
+        /* skip link-local addresses */
+        if (g_str_has_prefix(host, "fe80:"))
+            continue;
+
+        /* IPv6 first */
+        ips = g_slist_prepend(ips, g_strdup(host));
     }
-  }
+}
 
   freeifaddrs(ifap);
 
