@@ -199,9 +199,93 @@ bonjour_find_buddy_by_localpart(PurpleAccount *account, const char *jid)
     return NULL;
 }
 
+static void
+_bonjour_handle_presence(PurpleBuddy *pb, xmlnode *presence_node)
+{
+    PurpleAccount *account;
+    BonjourBuddy *bb;
+    const char *name;
+    const char *type;
+    xmlnode *child;
+    char *show_text = NULL;
+    char *status_text = NULL;
+    const char *status_id;
 
+    g_return_if_fail(pb != NULL);
+    g_return_if_fail(presence_node != NULL);
 
+    account = purple_buddy_get_account(pb);
+    bb = purple_buddy_get_protocol_data(pb);
+    name = purple_buddy_get_name(pb);
 
+    if (!account || !name)
+        return;
+
+    /* type='unavailable' => offline */
+    type = xmlnode_get_attrib(presence_node, "type");
+    if (type && !g_ascii_strcasecmp(type, "unavailable")) {
+        purple_prpl_got_user_status(account, name,
+                                    BONJOUR_STATUS_ID_OFFLINE,
+                                    NULL);
+        purple_prpl_got_user_idle(account, name, FALSE, 0);
+
+        if (bb) {
+            g_free(bb->status);
+            bb->status = g_strdup("offline");
+            g_free(bb->msg);
+            bb->msg = NULL;
+        }
+
+        purple_debug_info("bonjour",
+                          "Presence: %s is now offline\n", name);
+
+        return;
+    }
+
+    /* Get <show> and <status> text children, if present */
+    child = xmlnode_get_child(presence_node, "show");
+    if (child)
+        show_text = xmlnode_get_data(child);
+
+    child = xmlnode_get_child(presence_node, "status");
+    if (child)
+        status_text = xmlnode_get_data(child);
+
+    /* Map XMPP show -> our two statuses: available/away */
+    if (show_text &&
+        (!g_ascii_strcasecmp(show_text, "away") ||
+         !g_ascii_strcasecmp(show_text, "xa")   ||
+         !g_ascii_strcasecmp(show_text, "dnd"))) {
+        status_id = BONJOUR_STATUS_ID_AWAY;
+    } else {
+        status_id = BONJOUR_STATUS_ID_AVAILABLE;
+    }
+
+    if (bb) {
+        g_free(bb->status);
+        bb->status = show_text ? g_strdup(show_text) : NULL;
+        g_free(bb->msg);
+        bb->msg = status_text ? g_strdup(status_text) : NULL;
+    }
+
+    if (status_text) {
+        purple_prpl_got_user_status(account, name, status_id,
+                                    "message", status_text, NULL);
+    } else {
+        purple_prpl_got_user_status(account, name, status_id, NULL);
+    }
+
+    purple_prpl_got_user_idle(account, name, FALSE, 0);
+
+    purple_debug_info("bonjour",
+                      "Presence: %s show='%s' status='%s'\n",
+                      name,
+                      show_text ? show_text : "(none)",
+                      status_text ? status_text : "(none)");
+
+    g_free(show_text);
+    g_free(status_text);
+}
 
 static BonjourJabberConversation *
 bonjour_jabber_conv_new(PurpleBuddy *pb, PurpleAccount *account, const char *ip) {
@@ -488,20 +572,89 @@ _send_data(PurpleBuddy *pb, char *message)
   return ret;
 }
 
-void bonjour_jabber_process_packet(PurpleBuddy *pb, xmlnode *packet) {
+int
+bonjour_jabber_send_presence(PurpleBuddy *pb,
+                             const char *show,
+                             const char *status_msg,
+                             gboolean offline)
+{
+    BonjourBuddy *bb;
+    BonjourJabberConversation *bconv;
+    PurpleAccount *account;
+    const char *from;
+    xmlnode *presence_node, *child;
+    char *xml;
+    int ret;
+
+    if (pb == NULL)
+        return -1;
+
+    bb = purple_buddy_get_protocol_data(pb);
+    if (!bb) {
+        purple_debug_info("bonjour", "send_presence: buddy has no protocol data\n");
+        return -1;
+    }
+
+    bconv = bb->conversation;
+    if (!bconv || bconv->socket < 0) {
+        purple_debug_info("bonjour",
+                          "send_presence: %s has no active conversation\n",
+                          purple_buddy_get_name(pb));
+        return -1;
+    }
+
+    presence_node = xmlnode_new("presence");
+
+    if (offline) {
+        xmlnode_set_attrib(presence_node, "type", "unavailable");
+    }
+
+    account = purple_buddy_get_account(pb);
+    from = account ? bonjour_get_jid(account) : NULL;
+    if (!from)
+        from = "";
+    xmlnode_set_attrib(presence_node, "from", from);
+
+    if (!offline && show && *show) {
+        child = xmlnode_new_child(presence_node, "show");
+        xmlnode_insert_data(child, show, strlen(show));
+    }
+
+    if (status_msg && *status_msg) {
+        child = xmlnode_new_child(presence_node, "status");
+        xmlnode_insert_data(child, status_msg, strlen(status_msg));
+    }
+
+    xml = xmlnode_to_str(presence_node, NULL);
+    xmlnode_free(presence_node);
+
+    ret = (_send_data(pb, xml) >= 0);
+
+    g_free(xml);
+
+    return ret;
+}
+
+
+
+void
+bonjour_jabber_process_packet(PurpleBuddy *pb, xmlnode *packet) {
 
   g_return_if_fail(packet != NULL);
   g_return_if_fail(pb != NULL);
 
-  if (purple_strequal(packet->name, "message"))
+  if (purple_strequal(packet->name, "message")) {
     _jabber_parse_and_write_message_to_ui(packet, pb);
-  else if (purple_strequal(packet->name, "iq"))
+  } else if (purple_strequal(packet->name, "iq")) {
     xep_iq_parse(packet, pb);
-  else {
+  } else if (purple_strequal(packet->name, "presence")) {
+    _bonjour_handle_presence(pb, packet);
+  } else {
     purple_debug_warning("bonjour", "Unknown packet: %s\n",
       packet->name ? packet->name : "(null)");
   }
 }
+
 
 void
 bonjour_jabber_stream_ended(BonjourJabberConversation *bconv)
@@ -1760,75 +1913,6 @@ bonjour_jabber_get_local_ips(int fd)
     freeifaddrs(ifap);
     return g_slist_reverse(ips);
 }
-
-
-
-//GSList *
-//bonjour_jabber_get_local_ips(int fd)
-//{
-//    GSList *ips = NULL;
-//    struct ifaddrs *ifap = NULL, *ifa;
-//    int ret;
-//
-//    (void)fd; /* unused for now, keep signature compatible */
-//
-//    ret = getifaddrs(&ifap);
-//    if (ret != 0 || !ifap) {
-//        purple_debug_error("bonjour",
-//                           "Barev: getifaddrs failed: %s\n",
-//                           g_strerror(errno));
-//        return NULL;
-//    }
-//
-//    for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
-//        struct sockaddr *sa;
-//        char host[NI_MAXHOST];
-//
-//        if (!ifa->ifa_addr)
-//            continue;
-//
-//        sa = ifa->ifa_addr;
-//
-//        /* We only care about IPv6 addresses for Yggdrasil */
-//        if (sa->sa_family != AF_INET6)
-//            continue;
-//
-//        if (getnameinfo(sa, sizeof(struct sockaddr_in6),
-//                        host, sizeof(host),
-//                        NULL, 0, NI_NUMERICHOST) != 0) {
-//            continue;
-//        }
-//
-//        /* Filter out obvious "local" IPv6 ranges:
-//         *
-//         * fe80::/10   - link-local
-//         * fc00::/7    - ULA (fc.. or fd..)
-//         * ::1         - loopback
-//         */
-//        if (g_str_has_prefix(host, "fe80:") ||
-//            g_str_has_prefix(host, "fc")     ||
-//            g_str_has_prefix(host, "fd")     ||
-//            g_str_equal(host, "::1")) {
-//            purple_debug_info("bonjour",
-//                              "Barev: skipping local IPv6 %s on %s\n",
-//                              host,
-//                              ifa->ifa_name ? ifa->ifa_name : "?");
-//            continue;
-//        }
-//
-//        purple_debug_info("bonjour",
-//                          "Barev: adding candidate IPv6 %s on %s\n",
-//                          host,
-//                          ifa->ifa_name ? ifa->ifa_name : "?");
-//
-//        ips = g_slist_prepend(ips, g_strdup(host));
-//    }
-//
-//    freeifaddrs(ifap);
-//    return g_slist_reverse(ips);
-//}
-//
-
 
 void
 append_iface_if_linklocal(char *ip, guint32 interface_param) {

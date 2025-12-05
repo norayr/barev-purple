@@ -75,6 +75,12 @@ typedef struct _BonjourJabberConversation
  */
 gint bonjour_jabber_start(BonjourJabber *data);
 
+int bonjour_jabber_send_presence(PurpleBuddy *pb,
+                                 const char *show,
+                                 const char *status_msg,
+                                 gboolean offline);
+
+
 int bonjour_jabber_send_message(BonjourJabber *data, const char *to, const char *body);
 
 void bonjour_jabber_close_conversation(BonjourJabberConversation *bconv);

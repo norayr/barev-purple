@@ -845,13 +845,16 @@ bonjour_send_im(PurpleConnection *connection, const char *to, const char *msg, P
   return bonjour_jabber_send_message(((BonjourData*)(connection->proto_data))->jabber_data, to, msg);
 }
 
-static void bonjour_set_status(PurpleAccount *account, PurpleStatus *status)
+static void
+bonjour_set_status(PurpleAccount *account, PurpleStatus *status)
 {
   PurpleConnection *gc;
   BonjourData *bd;
   PurplePresence *presence;
-  const char *message, *bonjour_status;
+  const char *message;
   gchar *stripped;
+  const char *protocol_id;
+  gboolean is_barev = FALSE;
 
   if (!account)
     return;
@@ -859,55 +862,85 @@ static void bonjour_set_status(PurpleAccount *account, PurpleStatus *status)
   gc = purple_account_get_connection(account);
   if (!gc)
     return;
+
   bd = gc->proto_data;
-    if(!bd || !bd->dns_sd_data)
-      return; // no mdns, nothing to broadcast
+  if (!bd)
+    return;
+
+  protocol_id = purple_account_get_protocol_id(account);
+  if (protocol_id &&
+      (strstr(protocol_id, "barev") ||
+       strstr(protocol_id, "prpl-barev")))
+    is_barev = TRUE;
 
   presence = purple_account_get_presence(account);
-
-  if (!bd || !bd->dns_sd_data)
-   return; /* no mDNS, nothing to broadcast */
 
   message = purple_status_get_attr_string(status, "message");
   if (message == NULL)
     message = "";
   stripped = purple_markup_strip_html(message);
 
-  /*
-   * The three possible status for Bonjour are
-   *   -available ("avail")
-   *   -idle ("away")
-   *   -away ("dnd")
-   * Each of them can have an optional message.
-   */
-  if (purple_presence_is_available(presence))
-    bonjour_status = "avail";
-  else if (purple_presence_is_idle(presence))
-    bonjour_status = "away";
-  else
-    bonjour_status = "dnd";
+  /* --- Classic Bonjour: use mDNS TXT for status --- */
+  if (!is_barev && bd->dns_sd_data) {
+    const char *bonjour_status;
 
-  bonjour_dns_sd_send_status(bd->dns_sd_data, bonjour_status, stripped);
+    /*
+     * The three possible status for Bonjour are
+     *   -available ("avail")
+     *   -idle ("away")
+     *   -away ("dnd")
+     * Each of them can have an optional message.
+     */
+    if (purple_presence_is_available(presence))
+      bonjour_status = "avail";
+    else if (purple_presence_is_idle(presence))
+      bonjour_status = "away";
+    else
+      bonjour_status = "dnd";
+
+    bonjour_dns_sd_send_status(bd->dns_sd_data, bonjour_status, stripped);
+    g_free(stripped);
+    return;
+  }
+
+  /* --- Barev / no-mDNS: send XMPP-style presence to peers --- */
+  if (!bd->jabber_data) {
+    g_free(stripped);
+    return;
+  }
+
+  gboolean offline = FALSE;
+  const char *show = NULL;
+
+  PurpleStatusType *stype = purple_status_get_type(status);
+  const char *id = stype ? purple_status_type_get_id(stype) : NULL;
+
+  if (purple_presence_is_available(presence)) {
+    show = NULL;          /* available – no <show> element */
+  } else if (id && g_strcmp0(id, BONJOUR_STATUS_ID_OFFLINE) == 0) {
+    offline = TRUE;       /* type='unavailable' */
+  } else if (purple_presence_is_idle(presence) ||
+             (id && g_strcmp0(id, BONJOUR_STATUS_ID_AWAY) == 0)) {
+    show = "away";
+  } else {
+    /* anything else – treat as DND */
+    show = "dnd";
+  }
+
+  GSList *buddies = purple_find_buddies(account, NULL);
+  for (GSList *l = buddies; l; l = l->next) {
+    PurpleBuddy *pb = l->data;
+    BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
+
+    if (!bb || !bb->conversation)
+      continue;
+
+    bonjour_jabber_send_presence(pb, show, stripped, offline);
+  }
+  g_slist_free(buddies);
+
   g_free(stripped);
 }
-
-/*
- * The add_buddy callback removes the buddy from the local list.
- * Bonjour manages buddies for you, and adding someone locally by
- * hand is stupid.  Perhaps we should change libpurple not to allow adding
- * if there is no add_buddy callback.
- */
-//static void
-//bonjour_fake_add_buddy(PurpleConnection *pc, PurpleBuddy *buddy, PurpleGroup *group) {
-//  purple_debug_error("bonjour", "Buddy '%s' manually added; removing.  "
-//              "Bonjour buddies must be discovered and not manually added.\n",
-//         purple_buddy_get_name(buddy));
-//
-//  /* I suppose we could alert the user here, but it seems unnecessary. */
-//
-//  /* If this causes problems, it can be moved to an idle callback */
-//  purple_blist_remove_buddy(buddy);
-//}
 
 static void
 bonjour_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group)
@@ -957,8 +990,6 @@ bonjour_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group)
   /* For standard Bonjour with mDNS, handle buddy list updates */
   /* Note: The bonjourdnsssd member may not exist in your version */
 }
-
-
 
 static void bonjour_remove_buddy(PurpleConnection *pc, PurpleBuddy *buddy, PurpleGroup *group) {
   BonjourBuddy *bb = purple_buddy_get_protocol_data(buddy);
