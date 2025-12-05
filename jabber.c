@@ -93,6 +93,45 @@ enum sent_stream_start_types {
 static void
 xep_iq_parse(xmlnode *packet, PurpleBuddy *pb);
 
+/*
+ * Return TRUE if the string `host` looks like a Yggdrasil IPv6 address.
+ *
+ * Yggdrasil uses 0200::/7, so the first hextet is in the range
+ * 0x0200 .. 0x03FF (i.e. "200"–"3ff" in hex).
+ */
+static gboolean
+is_yggdrasil_addr(const char *host)
+{
+    const char *colon;
+    char hextet[5];
+    long val;
+    size_t len;
+
+    if (!host || !*host)
+        return FALSE;
+
+    colon = strchr(host, ':');
+    if (!colon)
+        return FALSE;
+
+    len = (size_t)(colon - host);
+    if (len == 0 || len > 4)
+        return FALSE;
+
+    memcpy(hextet, host, len);
+    hextet[len] = '\0';
+
+    errno = 0;
+    val = strtol(hextet, NULL, 16);
+    if (errno != 0)
+        return FALSE;
+
+    /* Yggdrasil prefix: 0200::/7 -> first hextet 0x0200–0x03FF */
+    return (val >= 0x0200 && val <= 0x03FF);
+}
+
+
+
 /* Barev/XEP-0174 helper:
  * Match "localpart@whatever" to a buddy whose name starts with "localpart@".
  * This lets us treat "inky@barev.local" the same as "inky@201:..." as long as
@@ -1637,6 +1676,16 @@ xep_iq_send_and_free(XepIq *iq)
  *
  * Each list element is a g_malloc'ed string; caller must g_free().
  */
+
+/*
+ * Barev: return local IPs suitable for Yggdrasil file-transfer.
+ *
+ * We only return IPv6 addresses that:
+ *   - are not link-local / ULA / loopback, and
+ *   - look like Yggdrasil (first hextet in 0x0200–0x03FF).
+ *
+ * Each list element is a g_malloc'ed string; caller must g_free().
+ */
 GSList *
 bonjour_jabber_get_local_ips(int fd)
 {
@@ -1644,7 +1693,7 @@ bonjour_jabber_get_local_ips(int fd)
     struct ifaddrs *ifap = NULL, *ifa;
     int ret;
 
-    (void)fd; /* unused for now, keep signature compatible */
+    (void)fd; /* unused, keep signature compatible */
 
     ret = getifaddrs(&ifap);
     if (ret != 0 || !ifap) {
@@ -1680,8 +1729,8 @@ bonjour_jabber_get_local_ips(int fd)
          * ::1         - loopback
          */
         if (g_str_has_prefix(host, "fe80:") ||
-            g_str_has_prefix(host, "fc")     ||
-            g_str_has_prefix(host, "fd")     ||
+            g_str_has_prefix(host, "fc")    ||
+            g_str_has_prefix(host, "fd")    ||
             g_str_equal(host, "::1")) {
             purple_debug_info("bonjour",
                               "Barev: skipping local IPv6 %s on %s\n",
@@ -1690,8 +1739,18 @@ bonjour_jabber_get_local_ips(int fd)
             continue;
         }
 
+        /* Now only keep Yggdrasil-style globals (e.g. 201:..., 304:..., etc.)
+         * and drop normal global IPv6 like 2001:xxxx:... */
+        if (!is_yggdrasil_addr(host)) {
+            purple_debug_info("bonjour",
+                              "Barev: skipping non-Yggdrasil global IPv6 %s on %s\n",
+                              host,
+                              ifa->ifa_name ? ifa->ifa_name : "?");
+            continue;
+        }
+
         purple_debug_info("bonjour",
-                          "Barev: adding candidate IPv6 %s on %s\n",
+                          "Barev: adding candidate Yggdrasil IPv6 %s on %s\n",
                           host,
                           ifa->ifa_name ? ifa->ifa_name : "?");
 
@@ -1702,6 +1761,73 @@ bonjour_jabber_get_local_ips(int fd)
     return g_slist_reverse(ips);
 }
 
+
+
+//GSList *
+//bonjour_jabber_get_local_ips(int fd)
+//{
+//    GSList *ips = NULL;
+//    struct ifaddrs *ifap = NULL, *ifa;
+//    int ret;
+//
+//    (void)fd; /* unused for now, keep signature compatible */
+//
+//    ret = getifaddrs(&ifap);
+//    if (ret != 0 || !ifap) {
+//        purple_debug_error("bonjour",
+//                           "Barev: getifaddrs failed: %s\n",
+//                           g_strerror(errno));
+//        return NULL;
+//    }
+//
+//    for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
+//        struct sockaddr *sa;
+//        char host[NI_MAXHOST];
+//
+//        if (!ifa->ifa_addr)
+//            continue;
+//
+//        sa = ifa->ifa_addr;
+//
+//        /* We only care about IPv6 addresses for Yggdrasil */
+//        if (sa->sa_family != AF_INET6)
+//            continue;
+//
+//        if (getnameinfo(sa, sizeof(struct sockaddr_in6),
+//                        host, sizeof(host),
+//                        NULL, 0, NI_NUMERICHOST) != 0) {
+//            continue;
+//        }
+//
+//        /* Filter out obvious "local" IPv6 ranges:
+//         *
+//         * fe80::/10   - link-local
+//         * fc00::/7    - ULA (fc.. or fd..)
+//         * ::1         - loopback
+//         */
+//        if (g_str_has_prefix(host, "fe80:") ||
+//            g_str_has_prefix(host, "fc")     ||
+//            g_str_has_prefix(host, "fd")     ||
+//            g_str_equal(host, "::1")) {
+//            purple_debug_info("bonjour",
+//                              "Barev: skipping local IPv6 %s on %s\n",
+//                              host,
+//                              ifa->ifa_name ? ifa->ifa_name : "?");
+//            continue;
+//        }
+//
+//        purple_debug_info("bonjour",
+//                          "Barev: adding candidate IPv6 %s on %s\n",
+//                          host,
+//                          ifa->ifa_name ? ifa->ifa_name : "?");
+//
+//        ips = g_slist_prepend(ips, g_strdup(host));
+//    }
+//
+//    freeifaddrs(ifap);
+//    return g_slist_reverse(ips);
+//}
+//
 
 
 void
