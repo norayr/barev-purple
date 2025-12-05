@@ -37,6 +37,7 @@
 #define BONJOUR_STATUS_ID_OFFLINE   "offline"
 #define BONJOUR_STATUS_ID_AVAILABLE "available"
 #define BONJOUR_STATUS_ID_AWAY      "away"
+#define BONJOUR_STATUS_ID_BUSY      "busy"
 
 #define BONJOUR_DEFAULT_PORT 5299
 

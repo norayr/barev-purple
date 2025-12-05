@@ -254,9 +254,11 @@ _bonjour_handle_presence(PurpleBuddy *pb, xmlnode *presence_node)
     /* Map XMPP show -> our two statuses: available/away */
     if (show_text &&
         (!g_ascii_strcasecmp(show_text, "away") ||
-         !g_ascii_strcasecmp(show_text, "xa")   ||
-         !g_ascii_strcasecmp(show_text, "dnd"))) {
+         !g_ascii_strcasecmp(show_text, "xa"))) {
         status_id = BONJOUR_STATUS_ID_AWAY;
+    } else if (show_text &&
+               !g_ascii_strcasecmp(show_text, "dnd")) {
+        status_id = BONJOUR_STATUS_ID_BUSY;
     } else {
         status_id = BONJOUR_STATUS_ID_AVAILABLE;
     }
@@ -267,6 +269,15 @@ _bonjour_handle_presence(PurpleBuddy *pb, xmlnode *presence_node)
         g_free(bb->msg);
         bb->msg = status_text ? g_strdup(status_text) : NULL;
     }
+
+    PurpleStatusType *stype = purple_account_get_status_type(account, status_id);
+    if (!stype) {
+        purple_debug_warning("bonjour",
+            "Presence: %s: unknown status id '%s', falling back to 'available'\n",
+            name, status_id);
+        status_id = BONJOUR_STATUS_ID_AVAILABLE;
+    }
+
 
     if (status_text) {
         purple_prpl_got_user_status(account, name, status_id,

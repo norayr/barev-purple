@@ -876,68 +876,59 @@ bonjour_set_status(PurpleAccount *account, PurpleStatus *status)
   presence = purple_account_get_presence(account);
 
   message = purple_status_get_attr_string(status, "message");
-  if (message == NULL)
+  if (!message)
     message = "";
   stripped = purple_markup_strip_html(message);
 
-  /* --- Classic Bonjour: use mDNS TXT for status --- */
-  if (!is_barev && bd->dns_sd_data) {
-    const char *bonjour_status;
-
-    /*
-     * The three possible status for Bonjour are
-     *   -available ("avail")
-     *   -idle ("away")
-     *   -away ("dnd")
-     * Each of them can have an optional message.
-     */
-    if (purple_presence_is_available(presence))
-      bonjour_status = "avail";
-    else if (purple_presence_is_idle(presence))
-      bonjour_status = "away";
-    else
-      bonjour_status = "dnd";
-
-    bonjour_dns_sd_send_status(bd->dns_sd_data, bonjour_status, stripped);
-    g_free(stripped);
-    return;
-  }
-
-  /* --- Barev / no-mDNS: send XMPP-style presence to peers --- */
-  if (!bd->jabber_data) {
-    g_free(stripped);
-    return;
-  }
-
-  gboolean offline = FALSE;
-  const char *show = NULL;
-
+  /* Figure out which logical state we are in */
   PurpleStatusType *stype = purple_status_get_type(status);
   const char *id = stype ? purple_status_type_get_id(stype) : NULL;
 
-  if (purple_presence_is_available(presence)) {
-    show = NULL;          /* available – no <show> element */
-  } else if (id && g_strcmp0(id, BONJOUR_STATUS_ID_OFFLINE) == 0) {
-    offline = TRUE;       /* type='unavailable' */
-  } else if (purple_presence_is_idle(presence) ||
-             (id && g_strcmp0(id, BONJOUR_STATUS_ID_AWAY) == 0)) {
+  gboolean offline = FALSE;
+  const char *show = NULL;          /* XMPP <show> */
+  const char *bonjour_status = NULL;/* mDNS TXT: "avail"/"away"/"dnd" */
+
+  if (id && g_strcmp0(id, BONJOUR_STATUS_ID_OFFLINE) == 0) {
+    offline = TRUE;
+    bonjour_status = "dnd";   /* or "away" – Bonjour doesn't really care */
+  } else if (id && g_strcmp0(id, BONJOUR_STATUS_ID_AWAY) == 0) {
     show = "away";
-  } else {
-    /* anything else – treat as DND */
+    bonjour_status = "away";
+  } else if (id && g_strcmp0(id, BONJOUR_STATUS_ID_BUSY) == 0) {
     show = "dnd";
+    bonjour_status = "dnd";
+  } else {
+    /* Default: available */
+    show = NULL;
+    bonjour_status = "avail";
   }
 
-  GSList *buddies = purple_find_buddies(account, NULL);
-  for (GSList *l = buddies; l; l = l->next) {
-    PurpleBuddy *pb = l->data;
-    BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
-
-    if (!bb || !bb->conversation)
-      continue;
-
-    bonjour_jabber_send_presence(pb, show, stripped, offline);
+  /* --- Classic Bonjour: DNS-SD TXT status --- */
+  if (bd->dns_sd_data) {
+    /*
+     * The three possible status for Bonjour are
+     *   - available ("avail")
+     *   - idle      ("away")
+     *   - away/DND  ("dnd")
+     * Each of them can have an optional message.
+     */
+    bonjour_dns_sd_send_status(bd->dns_sd_data, bonjour_status, stripped);
   }
-  g_slist_free(buddies);
+
+  /* --- Barev: send XMPP presence to peers --- */
+  if (is_barev && bd->jabber_data) {
+    GSList *buddies = purple_find_buddies(account, NULL);
+    for (GSList *l = buddies; l; l = l->next) {
+      PurpleBuddy *pb = l->data;
+      BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
+
+      if (!bb || !bb->conversation)
+        continue;
+
+      bonjour_jabber_send_presence(pb, show, stripped, offline);
+    }
+    g_slist_free(buddies);
+  }
 
   g_free(stripped);
 }
@@ -1018,6 +1009,13 @@ bonjour_status_types(PurpleAccount *account)
   type = purple_status_type_new_with_attrs(PURPLE_STATUS_AWAY,
                        BONJOUR_STATUS_ID_AWAY,
                        NULL, TRUE, TRUE, FALSE,
+                       "message", _("Message"),
+                       purple_value_new(PURPLE_TYPE_STRING), NULL);
+  status_types = g_list_append(status_types, type);
+
+  type = purple_status_type_new_with_attrs(PURPLE_STATUS_UNAVAILABLE,
+                       BONJOUR_STATUS_ID_BUSY,
+                       _("Do Not Disturb"), TRUE, TRUE, FALSE,
                        "message", _("Message"),
                        purple_value_new(PURPLE_TYPE_STRING), NULL);
   status_types = g_list_append(status_types, type);
