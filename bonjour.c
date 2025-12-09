@@ -427,7 +427,8 @@ static void barev_remove_contact(PurpleAccount *account, const char *name)
         char *line = lines[i];
         char *line_trimmed;
         char **parts;
-        char *existing_name;
+        char *existing_localpart = NULL;
+        char *existing_jid = NULL;
 
         if (!line || !*line)
             continue;
@@ -437,9 +438,59 @@ static void barev_remove_contact(PurpleAccount *account, const char *name)
             continue;
 
         parts = g_strsplit(line_trimmed, ",", 3);
-        existing_name = parts[0];
+        if (!parts[0]) {
+            g_strfreev(parts);
+            continue;
+        }
 
-        if (existing_name && g_strcmp0(existing_name, name) == 0) {
+        /* Parse the first field which could be either:
+         * - New format: "nick" (just localpart)
+         * - Old format: "nick@ip" (full JID)
+         */
+        existing_jid = parts[0];
+
+        /* Extract localpart from existing_jid */
+        const char *at_pos = strchr(existing_jid, '@');
+        if (at_pos) {
+            /* Old format: "nick@ip" - extract just the nick */
+            existing_localpart = g_strndup(existing_jid, (gsize)(at_pos - existing_jid));
+        } else {
+            /* New format: "nick" - use as is */
+            existing_localpart = g_strdup(existing_jid);
+        }
+
+        /* Also extract localpart from the name we're trying to remove */
+        char *name_localpart = NULL;
+        const char *name_at = strchr(name, '@');
+        if (name_at) {
+            name_localpart = g_strndup(name, (gsize)(name_at - name));
+        } else {
+            name_localpart = g_strdup(name);
+        }
+
+        /* Check if we should remove this line by comparing:
+         * 1. Full JID vs full JID (for old format)
+         * 2. Localpart vs localpart (for new format)
+         */
+        gboolean should_remove = FALSE;
+
+        if (g_strcmp0(existing_jid, name) == 0) {
+            /* Exact match on full JID (old format) */
+            should_remove = TRUE;
+            purple_debug_info("bonjour", "Removing contact (full JID match): %s == %s\n",
+                             existing_jid, name);
+        } else if (existing_localpart && name_localpart &&
+                   g_strcmp0(existing_localpart, name_localpart) == 0) {
+            /* Match on localpart (new format) */
+            should_remove = TRUE;
+            purple_debug_info("bonjour", "Removing contact (localpart match): %s == %s\n",
+                             existing_localpart, name_localpart);
+        }
+
+        g_free(existing_localpart);
+        g_free(name_localpart);
+
+        if (should_remove) {
             /* skip this one (delete) */
             g_strfreev(parts);
             continue;
@@ -475,6 +526,9 @@ barev_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group)
         purple_notify_error(gc, "Invalid Buddy Format",
                             "Barev buddies must be in format: nick@ipv6_address",
                             full_buddy_name);
+
+        purple_account_remove_buddy(gc->account, buddy, group);
+        purple_blist_remove_buddy(buddy);
         return;
     }
 
@@ -492,6 +546,15 @@ barev_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group)
                           info->nick, info->ipv6_address);
     } else {
         purple_debug_error("bonjour", "Barev: buddy %s has no IPv6!\n", info->nick);
+        /* If no IPv6, this is also invalid */
+        bonjour_buddy_delete(bb);
+        g_free(info->nick);
+        g_free(info->ipv6_address);
+        g_free(info);
+
+        purple_account_remove_buddy(gc->account, buddy, group);
+        purple_blist_remove_buddy(buddy);
+        return;
     }
 
     /* Default metadata */
