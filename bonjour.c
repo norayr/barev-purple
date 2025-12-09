@@ -65,16 +65,24 @@ typedef struct {
   int port;
 } BarevBuddyInfo;
 
-/* Parse buddy string in format: nick or nick@ipv6_address */
+/* Parse buddy string in format: nick@ipv6_address */
 static BarevBuddyInfo *
 parse_barev_buddy_string(const char *buddy_str)
 {
   BarevBuddyInfo *info;
   char *at_sign;
   char *str_copy;
+  char *colon_pos;
+  char *percent_pos;
 
   if (!buddy_str || strlen(buddy_str) == 0) {
     purple_debug_error("bonjour", "Empty buddy string\n");
+    return NULL;
+  }
+
+  /* Check for minimum length - at least "a@b" */
+  if (strlen(buddy_str) < 3) {
+    purple_debug_error("bonjour", "Buddy string too short: '%s'\n", buddy_str);
     return NULL;
   }
 
@@ -90,23 +98,80 @@ parse_barev_buddy_string(const char *buddy_str)
     return NULL;
   }
 
+  /* Check that @ is not at the beginning or end */
+  if (at_sign == str_copy || *(at_sign + 1) == '\0') {
+    purple_debug_error("bonjour", "Invalid Barev buddy format '%s' - @ at wrong position\n", buddy_str);
+    g_free(info);
+    g_free(str_copy);
+    return NULL;
+  }
+
   /* Extract nick */
   *at_sign = '\0';
   info->nick = g_strdup(str_copy);
+
+  /* Validate nick is not empty */
+  if (!info->nick || strlen(info->nick) == 0) {
+    purple_debug_error("bonjour", "Invalid Barev buddy format '%s' - empty nickname\n", buddy_str);
+    g_free(info->nick);
+    g_free(info);
+    g_free(str_copy);
+    return NULL;
+  }
 
   /* Extract IPv6 address */
   char *ipv6_start = at_sign + 1;
   info->ipv6_address = g_strdup(ipv6_start);
   info->port = BONJOUR_DEFAULT_PORT; /* Default port */
 
-  /* Check for port at end (after last colon) - be careful with IPv6 */
-  /* Port format would be: nick@[ipv6]:port or nick@ipv6%5299 */
+  /* Validate IPv6 is not empty */
+  if (!info->ipv6_address || strlen(info->ipv6_address) == 0) {
+    purple_debug_error("bonjour", "Invalid Barev buddy format '%s' - empty IPv6 address\n", buddy_str);
+    g_free(info->nick);
+    g_free(info->ipv6_address);
+    g_free(info);
+    g_free(str_copy);
+    return NULL;
+  }
 
-  g_free(str_copy);
+  /* Check for IPv6 scope identifier (after %) */
+  percent_pos = strchr(info->ipv6_address, '%');
+  if (percent_pos) {
+    /* Has scope ID, port would be after another colon if present */
+    colon_pos = strrchr(info->ipv6_address, ':');
+    if (colon_pos && colon_pos > percent_pos) {
+      /* Port specified after scope ID, like 2001:db8::1%eth0:5299 */
+      char *port_str = colon_pos + 1;
+      if (*port_str != '\0') {
+        info->port = atoi(port_str);
+        *colon_pos = '\0'; /* Remove port from IP string */
+      }
+    }
+  } else {
+    /* No scope ID, check for port at the end (last colon after the last colon in IPv6) */
+    /* This is tricky because IPv6 has colons. We'll look for pattern: ]:port or :port after double colon */
+    if (info->ipv6_address[0] == '[') {
+      /* Bracketed IPv6: [2001:db8::1]:5299 */
+      char *bracket_end = strchr(info->ipv6_address, ']');
+      if (bracket_end && *(bracket_end + 1) == ':') {
+        char *port_str = bracket_end + 2;
+        if (*port_str != '\0') {
+          info->port = atoi(port_str);
+          *(bracket_end + 1) = '\0'; /* Remove :port */
+          /* Also remove the closing bracket */
+          *bracket_end = '\0';
+        }
+      }
+    } else {
+      /* Simple IPv6, look for pattern after last colon that's not part of IPv6 */
+      /* For simplicity, we'll assume no port specification without brackets for now */
+    }
+  }
 
   purple_debug_info("bonjour", "Parsed Barev buddy: nick=%s, ipv6=%s, port=%d\n",
     info->nick, info->ipv6_address, info->port);
 
+  g_free(str_copy);
   return info;
 }
 
@@ -1052,10 +1117,27 @@ bonjour_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group)
 
 static void bonjour_remove_buddy(PurpleConnection *pc, PurpleBuddy *buddy, PurpleGroup *group) {
   BonjourBuddy *bb = purple_buddy_get_protocol_data(buddy);
+
   if (bb) {
+    purple_debug_info("bonjour", "Removing buddy: %s\n", purple_buddy_get_name(buddy));
+
+    /* Remove from contacts file */
     barev_remove_contact(bb->account, bb->name);
+
+    /* Clean up the conversation if it exists */
+    if (bb->conversation) {
+        bonjour_jabber_close_conversation(bb->conversation);
+        bb->conversation = NULL;
+    }
+
+    /* Delete the protocol data */
     bonjour_buddy_delete(bb);
     purple_buddy_set_protocol_data(buddy, NULL);
+  } else {
+    /* Even if no protocol data, try to remove from contacts file */
+    const char *buddy_name = purple_buddy_get_name(buddy);
+    purple_debug_info("bonjour", "Removing buddy without protocol data: %s\n", buddy_name);
+    barev_remove_contact(pc->account, buddy_name);
   }
 }
 
