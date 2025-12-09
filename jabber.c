@@ -94,6 +94,19 @@ enum sent_stream_start_types {
   FULLY_SENT     = 2
 };
 
+/* Helper to format the IPv6 */
+static gchar *
+format_host_for_proxy(const gchar *ip)
+{
+    /* Check if this looks like an IPv6 address (contains colon) */
+    if (ip && strchr(ip, ':')) {
+        /* IPv6 address - needs brackets for host:port format */
+        return g_strdup_printf("[%s]", ip);
+    }
+    /* IPv4 address - no brackets needed */
+    return g_strdup(ip);
+}
+
 /* Ping functions */
 /* Helper function to generate ping ID */
 static gchar* generate_ping_id(void) {
@@ -1335,14 +1348,21 @@ _connected_to_buddy(gpointer data, gint source, const gchar *error)
     if (tmp != NULL) {
       const gchar *ip;
       PurpleProxyConnectData *connect_data;
+      gchar *host_for_connect;
 
       bb->conversation->ip_link = ip = tmp->data;
 
-      purple_debug_info("bonjour", "Starting conversation with %s at %s:%d\n",
-            purple_buddy_get_name(pb), ip, bb->port_p2pj);
+      /* Format IP correctly for IPv6 */
+      host_for_connect = format_host_for_proxy(ip);
+
+      purple_debug_info("bonjour", "Starting conversation with %s at %s:%d (formatted: %s:%d)\n",
+            purple_buddy_get_name(pb), ip, bb->port_p2pj,
+            host_for_connect, bb->port_p2pj);
 
       connect_data = purple_proxy_connect(purple_account_get_connection(account),
-                  account, ip, bb->port_p2pj, _connected_to_buddy, pb);
+                  account, host_for_connect, bb->port_p2pj, _connected_to_buddy, pb);
+
+      g_free(host_for_connect);
 
       if (connect_data != NULL) {
         g_free(bb->conversation->ip);
@@ -1393,6 +1413,7 @@ _connected_to_buddy(gpointer data, gint source, const gchar *error)
   bb->conversation->rx_handler = purple_input_add(source,
     PURPLE_INPUT_READ, _client_socket_handler, bb->conversation);
 }
+
 void
 bonjour_jabber_conv_match_by_name(BonjourJabberConversation *bconv)
 {
@@ -1615,6 +1636,7 @@ _find_or_start_conversation(BonjourJabber *jdata, const gchar *to)
     PurpleProxyConnectData *connect_data;
     PurpleProxyInfo *proxy_info;
     const char *ip = bb->ips->data; /* Start with the first IP address. */
+    gchar *host_for_connect;
 
     purple_debug_info("bonjour", "Starting conversation with %s at %s:%d\n", to, ip, bb->port_p2pj);
 
@@ -1627,10 +1649,15 @@ _find_or_start_conversation(BonjourJabber *jdata, const gchar *to)
     }
     purple_proxy_info_set_type(proxy_info, PURPLE_PROXY_NONE);
 
+    /* Format IP correctly for IPv6 */
+    host_for_connect = format_host_for_proxy(ip);
+
     connect_data = purple_proxy_connect(
                 purple_account_get_connection(jdata->account),
                 jdata->account,
-                ip, bb->port_p2pj, _connected_to_buddy, pb);
+                host_for_connect, bb->port_p2pj, _connected_to_buddy, pb);
+
+    g_free(host_for_connect);
 
     if (connect_data == NULL) {
       purple_debug_error("bonjour", "Unable to connect to buddy (%s).\n", to);
