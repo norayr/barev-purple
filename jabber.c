@@ -95,16 +95,44 @@ enum sent_stream_start_types {
 };
 
 /* Helper to format the IPv6 */
+/* Update format_host_for_proxy in jabber.c */
+
 static gchar *
 format_host_for_proxy(const gchar *ip)
 {
-    /* Check if this looks like an IPv6 address (contains colon) */
-    if (ip && strchr(ip, ':')) {
-        /* IPv6 address - needs brackets for host:port format */
-        return g_strdup_printf("[%s]", ip);
+    if (!ip) return g_strdup("");
+
+    /* Remove any existing brackets first */
+    gchar *clean_ip = g_strdup(ip);
+    if (clean_ip[0] == '[') {
+        /* Remove opening bracket */
+        memmove(clean_ip, clean_ip + 1, strlen(clean_ip));
+
+        /* Remove closing bracket if present */
+        char *closing = strchr(clean_ip, ']');
+        if (closing) *closing = '\0';
     }
-    /* IPv4 address - no brackets needed */
-    return g_strdup(ip);
+
+    /* For IPv6 addresses, we need to handle scope IDs */
+    if (strchr(clean_ip, ':')) {
+        /* IPv6 address */
+        if (strchr(clean_ip, '%')) {
+            /* Link-local with scope - keep as is */
+            gchar *result = g_strdup(clean_ip);
+            g_free(clean_ip);
+            return result;
+        } else {
+            /* Regular IPv6 - no brackets needed for proxy_connect */
+            gchar *result = g_strdup(clean_ip);
+            g_free(clean_ip);
+            return result;
+        }
+    }
+
+    /* IPv4 address - return as is */
+    gchar *result = g_strdup(clean_ip);
+    g_free(clean_ip);
+    return result;
 }
 
 /* Ping functions */
@@ -245,6 +273,42 @@ static void bonjour_jabber_handle_ping_response(xmlnode *packet, BonjourJabberCo
 
 static void
 xep_iq_parse(xmlnode *packet, PurpleBuddy *pb);
+
+static gboolean
+is_ipv6_address(const gchar *str)
+{
+    /* Check if string looks like an IPv6 address */
+    if (!str) return FALSE;
+
+    /* Must contain colon */
+    if (!strchr(str, ':')) return FALSE;
+
+    /* Check format - should be hex digits and colons */
+    const gchar *p = str;
+    int colons = 0;
+    int digits = 0;
+
+    while (*p) {
+        if ((*p >= '0' && *p <= '9') ||
+            (*p >= 'a' && *p <= 'f') ||
+            (*p >= 'A' && *p <= 'F')) {
+            digits++;
+        } else if (*p == ':') {
+            colons++;
+        } else if (*p == '%') {
+            /* Link-local with scope ID - OK */
+            break;
+        } else {
+            /* Invalid character for IPv6 */
+            return FALSE;
+        }
+        p++;
+    }
+
+    /* IPv6 must have at least 2 colons */
+    return (colons >= 2);
+}
+
 
 /*
  * Return TRUE if the string `host` looks like a Yggdrasil IPv6 address.
@@ -1129,49 +1193,47 @@ _server_socket_handler(gpointer data, int server_socket, PurpleInputCondition co
   common_sockaddr_t their_addr;
   socklen_t sin_size = sizeof(common_sockaddr_t);
   int client_socket;
-#ifdef HAVE_INET_NTOP
-  char addrstr[INET6_ADDRSTRLEN];
-#endif
+  char addrstr[NI_MAXHOST]; /* NI_MAXHOST is 1025, plenty of space */
   const char *address_text = NULL;
-  struct _match_buddies_by_address_t *mbba;
-  BonjourJabberConversation *bconv;
-  GSList *buddies;
 
   if (condition != PURPLE_INPUT_READ)
     return;
 
   memset(&their_addr, 0, sin_size);
 
-  if ((client_socket = accept(server_socket, &their_addr.sa, &sin_size)) == -1)
+  if ((client_socket = accept(server_socket, &their_addr.sa, &sin_size)) == -1) {
+    purple_debug_error("bonjour", "accept() failed: %s\n", g_strerror(errno));
     return;
+  }
 
   _purple_network_set_common_socket_flags(client_socket);
 
-#ifdef HAVE_INET_NTOP
-  if (their_addr.sa.sa_family == AF_INET6) {
-    address_text = inet_ntop(their_addr.sa.sa_family,
-      &their_addr.in6.sin6_addr, addrstr, sizeof(addrstr));
-
-    /* Append scope for link-local addresses */
-    if (address_text && IN6_IS_ADDR_LINKLOCAL(&their_addr.in6.sin6_addr)) {
-      append_iface_if_linklocal(addrstr, their_addr.in6.sin6_scope_id);
-    }
-  } else if (their_addr.sa.sa_family == AF_INET) {
-    address_text = inet_ntop(their_addr.sa.sa_family,
-      &their_addr.in.sin_addr, addrstr, sizeof(addrstr));
+  /* Use getnameinfo to get the IP address - it handles IPv6 scope IDs automatically */
+  if (getnameinfo(&their_addr.sa, sin_size,
+                  addrstr, sizeof(addrstr),
+                  NULL, 0, NI_NUMERICHOST) != 0) {
+    purple_debug_error("bonjour", "getnameinfo failed: %s\n", g_strerror(errno));
+    close(client_socket);
+    return;
   }
-#else
-  address_text = inet_ntoa(their_addr.in.sin_addr);
-#endif
+
+  address_text = addrstr;
+  purple_debug_info("bonjour", "Received incoming connection from %s.\n", address_text);
+
+
 
   /* Check if we got a valid address */
   if (!address_text || strlen(address_text) == 0) {
-    purple_debug_error("bonjour", "Failed to get valid IP address from incoming connection\n");
+    purple_debug_error("bonjour", "Failed to extract IP address\n");
     close(client_socket);
     return;
   }
 
   purple_debug_info("bonjour", "Received incoming connection from %s.\n", address_text);
+
+  /* Rest of the function remains the same... */
+  struct _match_buddies_by_address_t *mbba;
+  GSList *buddies;
 
   mbba = g_new0(struct _match_buddies_by_address_t, 1);
   mbba->address = address_text;
@@ -1180,23 +1242,28 @@ _server_socket_handler(gpointer data, int server_socket, PurpleInputCondition co
   g_slist_foreach(buddies, _match_buddies_by_address, mbba);
   g_slist_free(buddies);
 
+  /* If no buddy matches, reject immediately */
   if (mbba->matched_buddies == NULL) {
-    /* For Barev mode - accept unknown connections for now */
-    purple_debug_info("bonjour", "No buddy matched for %s - accepting for stream negotiation\n",
-      address_text);
+    //purple_debug_warning("bonjour", "Rejecting connection from unknown IP: %s\n", address_text);
+    //close(client_socket);
+    //g_free(mbba);
+    //return;
+    purple_debug_warning("bonjour", "Rejecting connection from unknown IP: %s\n", address_text);
   }
 
+  /* Clean up match structure */
   if (mbba->matched_buddies)
     g_slist_free(mbba->matched_buddies);
   g_free(mbba);
 
   /* Create conversation for this connection */
-  bconv = bonjour_jabber_conv_new(NULL, jdata->account, address_text);
+  BonjourJabberConversation *bconv = bonjour_jabber_conv_new(NULL, jdata->account, address_text);
   bconv->socket = client_socket;
   bconv->rx_handler = purple_input_add(client_socket, PURPLE_INPUT_READ, _client_socket_handler, bconv);
+
+  /* Add to pending conversations list */
+  jdata->pending_conversations = g_slist_prepend(jdata->pending_conversations, bconv);
 }
-
-
 
 static int
 start_serversocket_listening(int port, int socket, struct sockaddr *addr, size_t addr_size, gboolean ip6, gboolean allow_port_fallback)
@@ -1324,8 +1391,17 @@ _connected_to_buddy(gpointer data, gint source, const gchar *error)
   PurpleBuddy *pb = data;
   BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
 
-  bb->conversation->connect_data = NULL;
+  /* Debug log */
+  purple_debug_info("bonjour", "_connected_to_buddy for %s, source=%d, error=%s\n",
+                   purple_buddy_get_name(pb), source, error ? error : "(null)");
 
+  if (!bb || !bb->conversation) {
+    purple_debug_warning("bonjour", "No conversation for %s\n", purple_buddy_get_name(pb));
+    if (source >= 0) close(source);
+    return;
+  }
+
+  bb->conversation->connect_data = NULL;
   if (source < 0) {
     PurpleConversation *conv = NULL;
     PurpleAccount *account = NULL;
@@ -1500,6 +1576,8 @@ bonjour_jabber_conv_match_by_name(BonjourJabberConversation *bconv)
 
     bconv->pb = pb;
     bb->conversation = bconv;
+    purple_debug_info("bonjour", "Setting bb->conversation for %s to %p\n",
+                  purple_buddy_get_name(pb), bconv);
 
     /* Normalize buddy_name to the canonical buddy name, e.g. "inky@201:..." */
     if (bconv->buddy_name) {
@@ -1580,6 +1658,8 @@ void bonjour_jabber_conv_match_by_ip(BonjourJabberConversation *bconv) {
     /* TODO: Check if it's correct to call bconv->pb->account or bconv->account */
     bconv->pb = pb;
     bb->conversation = bconv;
+    purple_debug_info("bonjour", "Setting bb->conversation for %s to %p\n",
+                  purple_buddy_get_name(pb), bconv);
 
     /* We've matched a buddy.  First, make sure we aren't already talking to this person elsewhere */
     if(bb->conversation != NULL && bb->conversation != bconv) {
@@ -1587,6 +1667,8 @@ void bonjour_jabber_conv_match_by_ip(BonjourJabberConversation *bconv) {
       /* We can't delete the bconv here, but we can unassociate ourselves from it */
       bconv->pb = NULL;
       bb->conversation = bconv;
+      purple_debug_info("bonjour", "Setting bb->conversation for %s to %p\n",
+                  purple_buddy_get_name(pb), bconv);
     }
 
     /* Break because we only want to match one buddy */
@@ -1616,6 +1698,52 @@ void bonjour_jabber_conv_match_by_ip(BonjourJabberConversation *bconv) {
 
 }
 
+static void
+_connected_to_buddy_direct(gpointer data, gint socket, PurpleInputCondition condition)
+{
+    PurpleBuddy *pb = data;
+    BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
+
+    if (!bb || !bb->conversation) {
+        if (socket >= 0) close(socket);
+        return;
+    }
+
+    /* Check if connection succeeded */
+    int error = 0;
+    socklen_t len = sizeof(error);
+    if (getsockopt(socket, SOL_SOCKET, SO_ERROR, &error, &len) < 0 || error != 0) {
+        purple_debug_error("bonjour", "Direct connection to %s failed: %s\n",
+                         purple_buddy_get_name(pb), g_strerror(error));
+        close(socket);
+        bonjour_jabber_close_conversation(bb->conversation);
+        bb->conversation = NULL;
+        return;
+    }
+
+    /* Connection successful! */
+    purple_debug_info("bonjour", "Direct connection to %s established\n",
+                     purple_buddy_get_name(pb));
+
+    /* Remove the write handler */
+    if (bb->conversation->rx_handler) {
+        purple_input_remove(bb->conversation->rx_handler);
+        bb->conversation->rx_handler = 0;
+    }
+
+    /* Set up read handler */
+    bb->conversation->socket = socket;
+    bb->conversation->rx_handler = purple_input_add(socket, PURPLE_INPUT_READ,
+                                                   _client_socket_handler, bb->conversation);
+
+    /* Send stream init */
+    if (!bonjour_jabber_send_stream_init(bb->conversation, socket)) {
+        purple_debug_error("bonjour", "Failed to send stream init\n");
+        bonjour_jabber_close_conversation(bb->conversation);
+        bb->conversation = NULL;
+    }
+}
+
 static PurpleBuddy *
 _find_or_start_conversation(BonjourJabber *jdata, const gchar *to)
 {
@@ -1633,15 +1761,80 @@ _find_or_start_conversation(BonjourJabber *jdata, const gchar *to)
   /* Check if there is a previously open conversation */
   if (bb->conversation == NULL)
   {
-    PurpleProxyConnectData *connect_data;
-    PurpleProxyInfo *proxy_info;
+     purple_debug_info("bonjour", "Creating new conversation for %s (was NULL)\n", to);
     const char *ip = bb->ips->data; /* Start with the first IP address. */
-    gchar *host_for_connect;
 
     purple_debug_info("bonjour", "Starting conversation with %s at %s:%d\n", to, ip, bb->port_p2pj);
 
-    /* Make sure that the account always has a proxy of "none".
-     * This is kind of dirty, but proxy_connect_none() isn't exposed. */
+    /* Check if this is an IPv6 address */
+    if (is_ipv6_address(ip)) {
+        /* For IPv6 addresses, connect directly without DNS */
+        int sock = socket(AF_INET6, SOCK_STREAM, 0);
+        if (sock >= 0) {
+            struct sockaddr_in6 addr6;
+            memset(&addr6, 0, sizeof(addr6));
+            addr6.sin6_family = AF_INET6;
+            addr6.sin6_port = htons(bb->port_p2pj);
+
+            /* Parse IPv6 address */
+            char clean_ip[INET6_ADDRSTRLEN];
+            strncpy(clean_ip, ip, sizeof(clean_ip) - 1);
+            clean_ip[sizeof(clean_ip) - 1] = '\0';
+
+            /* Remove scope ID for inet_pton */
+            char *percent = strchr(clean_ip, '%');
+            if (percent) *percent = '\0';
+
+            if (inet_pton(AF_INET6, clean_ip, &addr6.sin6_addr) == 1) {
+                /* Handle scope ID if present */
+                if (percent) {
+                    /* Extract interface name or index */
+                    char *scope_str = percent + 1;
+                    unsigned int scope_id = if_nametoindex(scope_str);
+                    if (scope_id == 0) {
+                        /* Try to parse as number */
+                        scope_id = atoi(scope_str);
+                    }
+                    if (scope_id > 0) {
+                        addr6.sin6_scope_id = scope_id;
+                    }
+                }
+
+                _purple_network_set_common_socket_flags(sock);
+
+
+                if (connect(sock, (struct sockaddr*)&addr6, sizeof(addr6)) == 0 ||
+                    (errno == EINPROGRESS)) {
+                    /* Connection successful or in progress */
+                    bb->conversation = bonjour_jabber_conv_new(pb, jdata->account, ip);
+                    purple_debug_info("bonjour", "Setting bb->conversation for %s to %p\n", purple_buddy_get_name(pb), bb->conversation);
+                    bb->conversation->socket = sock;
+
+                    /* Set up handler for when connection completes */
+                    bb->conversation->rx_handler = purple_input_add(sock, PURPLE_INPUT_WRITE,
+                                                                   _connected_to_buddy_direct, pb);
+
+                    purple_debug_info("bonjour", "Direct IPv6 connection to %s:%d\n",
+                                     ip, bb->port_p2pj);
+                    return pb;
+                } else {
+                    purple_debug_error("bonjour", "connect() failed: %s\n", g_strerror(errno));
+                    close(sock);
+                }
+            } else {
+                purple_debug_error("bonjour", "inet_pton failed for IPv6: %s\n", ip);
+                close(sock);
+            }
+        }
+
+        /* Fall through to proxy_connect if direct fails */
+    }
+
+    /* For IPv4 or if direct IPv6 failed, use purple_proxy_connect */
+    PurpleProxyConnectData *connect_data;
+    PurpleProxyInfo *proxy_info;
+
+    /* Make sure that the account always has a proxy of "none". */
     proxy_info = purple_account_get_proxy_info(jdata->account);
     if (proxy_info == NULL) {
       proxy_info = purple_proxy_info_new();
@@ -1649,8 +1842,16 @@ _find_or_start_conversation(BonjourJabber *jdata, const gchar *to)
     }
     purple_proxy_info_set_type(proxy_info, PURPLE_PROXY_NONE);
 
-    /* Format IP correctly for IPv6 */
-    host_for_connect = format_host_for_proxy(ip);
+    /* Format host for proxy - IPv6 needs brackets */
+    gchar *host_for_connect;
+    if (strchr(ip, ':')) {
+        host_for_connect = g_strdup_printf("[%s]", ip);
+    } else {
+        host_for_connect = g_strdup(ip);
+    }
+
+    purple_debug_info("bonjour", "Using proxy_connect with host: %s, port: %d\n",
+                     host_for_connect, bb->port_p2pj);
 
     connect_data = purple_proxy_connect(
                 purple_account_get_connection(jdata->account),
@@ -1665,10 +1866,10 @@ _find_or_start_conversation(BonjourJabber *jdata, const gchar *to)
     }
 
     bb->conversation = bonjour_jabber_conv_new(pb, jdata->account, ip);
+    purple_debug_info("bonjour", "Setting bb->conversation for %s to %p\n",
+                  purple_buddy_get_name(pb), bb->conversation);
     bb->conversation->connect_data = connect_data;
     bb->conversation->ip_link = ip;
-    /* We don't want _send_data() to register the tx_handler;
-     * that neeeds to wait until we're actually connected. */
     bb->conversation->tx_handler = 0;
   }
   return pb;

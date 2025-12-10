@@ -54,4 +54,6 @@ install: $(PLUGIN)
 
 clean:
 	rm -f $(OBJS) $(PLUGIN)
+docs:
+	pandoc -o barev.pdf barev.md --pdf-engine=xelatex  -V geometry:margin=1in
 
