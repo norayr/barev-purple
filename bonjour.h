@@ -26,7 +26,6 @@
 #ifndef _BONJOUR_H_
 #define _BONJOUR_H_
 
-#include "mdns_common.h"
 #include "internal.h"
 #include "jabber.h"
 
@@ -41,6 +40,7 @@
 
 #define BONJOUR_DEFAULT_PORT 5299
 
+typedef struct _BonjourDnsSd BonjourDnsSd;
 typedef struct _BonjourData
 {
   BonjourDnsSd *dns_sd_data;

@@ -27,26 +27,24 @@
 #include <winsock2.h>
 #include <windows.h>
 #include <lm.h>
-#include "dns_sd_proxy.h"
 #endif
 
 #include "internal.h"
 
-#include "account.h"
-#include "accountopt.h"
-#include "debug.h"
-#include "util.h"
-#include "version.h"
+#include <account.h>
+#include <accountopt.h>
+#include <debug.h>
+#include <util.h>
+#include <version.h>
 
 #include "bonjour.h"
-#include "mdns_common.h"
 #include "jabber.h"
 #include "buddy.h"
 #include "bonjour_ft.h"
 
-#include "request.h" //for purple_request_fields
-#include "libpurple/blist.h" // for barev
-#include "eventloop.h"
+#include <request.h> //for purple_request_fields
+#include <blist.h> // for barev
+#include <eventloop.h>
 
 #include <errno.h>
 #include <sys/socket.h>
@@ -59,6 +57,7 @@ typedef struct {
 static void bonjour_set_status(PurpleAccount *account, PurpleStatus *status);
 static void bonjour_login(PurpleAccount *account);
 
+static void bonjour_login_barev(PurpleAccount *account);
 
 /* Structure for parsing manual buddy format */
 typedef struct {
@@ -917,132 +916,8 @@ bonjour_login_barev(PurpleAccount *account)
 static void
 bonjour_login(PurpleAccount *account)
 {
-  PurpleConnection *gc;
-  BonjourData *bd;
-  PurpleStatus *status;
-  PurplePresence *presence;
-  const char *username;
-  const char *protocol_id;
-  GSList *buddies, *l;
-  gboolean is_barev = FALSE;
-
-  g_return_if_fail(account != NULL);
-
-  gc = purple_account_get_connection(account);
-  g_return_if_fail(gc != NULL);
-
-  /* --- 1. Detect Barev via protocol id --- */
-  protocol_id = purple_account_get_protocol_id(account);
-  if (protocol_id && (strstr(protocol_id, "barev") || strstr(protocol_id, "prpl-barev"))) {
-    purple_debug_info("bonjour", "Detected Barev mode from protocol id '%s'\n", protocol_id);
-    bonjour_login_barev(account);
-    return;
-  }
-
-  /* --- 2. Detect Barev via account username (nick@ipv6, etc.) --- */
-  username = purple_account_get_username(account);
-  if (username && strchr(username, '@')) {
-    purple_debug_info("bonjour", "Detected Barev mode from account username '%s'\n", username);
-    bonjour_login_barev(account);
-    return;
-  }
-
-  /* --- 3. Detect Barev via any buddy name (nick@ipv6) --- */
-  buddies = purple_find_buddies(account, NULL);
-  for (l = buddies; l; l = l->next) {
-    PurpleBuddy *buddy = l->data;
-    const char *buddy_name = purple_buddy_get_name(buddy);
-
-    if (buddy_name && strchr(buddy_name, '@')) {
-      is_barev = TRUE;
-      purple_debug_info("bonjour",
-                        "Detected Barev mode from buddy name '%s'\n",
-                        buddy_name);
-      break;
-    }
-  }
-  g_slist_free(buddies);
-
-  if (is_barev) {
-    bonjour_login_barev(account);
-    return;
-  }
-
-  /* ===============================
-   *   Normal Bonjour (mDNS) mode
-   * =============================== */
-
-#ifdef _WIN32
-  if (!dns_sd_available()) {
-    purple_connection_error_reason(gc,
-                                   PURPLE_CONNECTION_ERROR_OTHER_ERROR,
-                                   _("Unable to find Apple's \"Bonjour for Windows\" toolkit, see "
-                                     "https://developer.pidgin.im/BonjourWindows for more information."));
-    return;
-  }
-#endif /* _WIN32 */
-
-  gc->flags |= PURPLE_CONNECTION_HTML;
-  gc->proto_data = bd = g_new0(BonjourData, 1);
-
-  /* Start waiting for jabber connections (iChat style) */
-  bd->jabber_data = g_new0(BonjourJabber, 1);
-  bd->jabber_data->socket = -1;
-  bd->jabber_data->socket6 = -1;
-  bd->jabber_data->port =
-      purple_account_get_int(account, "port", BONJOUR_DEFAULT_PORT);
-  bd->jabber_data->account = account;
-
-  if (bonjour_jabber_start(bd->jabber_data) == -1) {
-    purple_connection_error_reason(gc,
-                                   PURPLE_CONNECTION_ERROR_NETWORK_ERROR,
-                                   _("Unable to listen for incoming IM connections"));
-    return;
-  }
-
-  /* Load Barev-style manual contacts even in normal Bonjour mode */
-  barev_load_contacts(account);
-
-  /* Start periodic reconnect attempts for Barev contacts */
-  bd->reconnect_timer = purple_timeout_add_seconds(
-      30,
-      barev_reconnect_cb,
-      gc);
-
-  /* Connect to the mDNS daemon looking for buddies in the LAN */
-  bd->dns_sd_data = bonjour_dns_sd_new();
-  bd->dns_sd_data->first =
-      g_strdup(purple_account_get_string(account, "first", default_firstname));
-  bd->dns_sd_data->last =
-      g_strdup(purple_account_get_string(account, "last", default_lastname));
-  bd->dns_sd_data->port_p2pj = bd->jabber_data->port;
-  /* Not engaged in AV conference */
-  bd->dns_sd_data->vc = g_strdup("!");
-
-  status = purple_account_get_active_status(account);
-  presence = purple_account_get_presence(account);
-  if (purple_presence_is_available(presence))
-    bd->dns_sd_data->status = g_strdup("avail");
-  else if (purple_presence_is_idle(presence))
-    bd->dns_sd_data->status = g_strdup("away");
-  else
-    bd->dns_sd_data->status = g_strdup("dnd");
-
-  bd->dns_sd_data->msg =
-      g_strdup(purple_status_get_attr_string(status, "message"));
-
-  bd->dns_sd_data->account = account;
-
-  if (!bonjour_dns_sd_start(bd->dns_sd_data)) {
-    purple_debug_warning("bonjour",
-                         "mDNS start failed; continuing in manual-only mode.\n");
-    g_clear_pointer(&bd->dns_sd_data, bonjour_dns_sd_free);
-  } else {
-    bonjour_dns_sd_update_buddy_icon(bd->dns_sd_data);
-  }
-
-  /* Show the buddy list by telling Purple we have already connected */
-  purple_connection_set_state(gc, PURPLE_CONNECTED);
+  /* Barev-only build: no mDNS support, always use Barev mode */
+  bonjour_login_barev(account);
 }
 
 static void
@@ -1056,41 +931,40 @@ bonjour_close(PurpleConnection *connection)
   /* Remove all the bonjour buddies */
   bonjour_removeallfromlocal(connection, bonjour_group);
 
-  /* Stop looking for buddies in the LAN */
-  if (bd != NULL && bd->dns_sd_data != NULL)
-  {
-    bonjour_dns_sd_stop(bd->dns_sd_data);
-    bonjour_dns_sd_free(bd->dns_sd_data);
-  }
-
+  /* Barev-only: just stop Jabber listener, no mDNS */
   if (bd != NULL && bd->jabber_data != NULL)
   {
-    /* Stop waiting for conversations */
     bonjour_jabber_stop(bd->jabber_data);
     g_free(bd->jabber_data);
   }
 
-    if (bd != NULL && bd->reconnect_timer != 0) {
-      purple_timeout_remove(bd->reconnect_timer);
-      bd->reconnect_timer = 0;
+  if (bd != NULL && bd->reconnect_timer != 0) {
+    purple_timeout_remove(bd->reconnect_timer);
+    bd->reconnect_timer = 0;
   }
 
-
-  /* Delete the bonjour group
-   * (purple_blist_remove_group will bail out if the group isn't empty)
-   */
+  /* Delete the bonjour group */
   if (bonjour_group != NULL)
     purple_blist_remove_group(bonjour_group);
 
-  /* Cancel any file transfers */
-  while (bd != NULL && bd->xfer_lists) {
-    purple_xfer_cancel_local(bd->xfer_lists->data);
+  /* Cancel any file transfers (unchanged) */
+  while (bd != NULL && bd->xfer_lists != NULL)
+  {
+    GList *lxfer = bd->xfer_lists->data;
+    while (lxfer != NULL)
+    {
+      PurpleXfer *xfer = lxfer->data;
+      if (xfer->type == PURPLE_XFER_RECEIVE)
+        purple_xfer_cancel_remote(xfer);
+      else
+        purple_xfer_cancel_local(xfer);
+      lxfer = g_list_delete_link(lxfer, lxfer);
+    }
+    bd->xfer_lists = g_slist_delete_link(bd->xfer_lists, bd->xfer_lists);
   }
 
-  if (bd != NULL)
-    g_free(bd->jid);
-  g_free(bd);
   connection->proto_data = NULL;
+  g_free(bd);
 }
 
 static const char *
@@ -1113,7 +987,6 @@ bonjour_set_status(PurpleAccount *account, PurpleStatus *status)
 {
   PurpleConnection *gc;
   BonjourData *bd;
-  PurplePresence *presence;
   const char *message;
   gchar *stripped;
   const char *protocol_id;
@@ -1136,8 +1009,6 @@ bonjour_set_status(PurpleAccount *account, PurpleStatus *status)
        strstr(protocol_id, "prpl-barev")))
     is_barev = TRUE;
 
-  presence = purple_account_get_presence(account);
-
   message = purple_status_get_attr_string(status, "message");
   if (!message)
     message = "";
@@ -1149,36 +1020,19 @@ bonjour_set_status(PurpleAccount *account, PurpleStatus *status)
 
   gboolean offline = FALSE;
   const char *show = NULL;          /* XMPP <show> */
-  const char *bonjour_status = NULL;/* mDNS TXT: "avail"/"away"/"dnd" */
 
   if (id && g_strcmp0(id, BONJOUR_STATUS_ID_OFFLINE) == 0) {
     offline = TRUE;
-    bonjour_status = "dnd";   /* or "away" – Bonjour doesn't really care */
   } else if (id && g_strcmp0(id, BONJOUR_STATUS_ID_AWAY) == 0) {
     show = "away";
-    bonjour_status = "away";
   } else if (id && g_strcmp0(id, BONJOUR_STATUS_ID_BUSY) == 0) {
     show = "dnd";
-    bonjour_status = "dnd";
   } else {
     /* Default: available */
     show = NULL;
-    bonjour_status = "avail";
   }
 
-  /* --- Classic Bonjour: DNS-SD TXT status --- */
-  if (bd->dns_sd_data) {
-    /*
-     * The three possible status for Bonjour are
-     *   - available ("avail")
-     *   - idle      ("away")
-     *   - away/DND  ("dnd")
-     * Each of them can have an optional message.
-     */
-    bonjour_dns_sd_send_status(bd->dns_sd_data, bonjour_status, stripped);
-  }
-
-  /* --- Barev: send XMPP presence to peers --- */
+  /* Barev: send XMPP-ish presence to peers */
   if (is_barev && bd->jabber_data) {
     GSList *buddies = purple_find_buddies(account, NULL);
     for (GSList *l = buddies; l; l = l->next) {
@@ -1189,6 +1043,7 @@ bonjour_set_status(PurpleAccount *account, PurpleStatus *status)
         continue;
 
       bonjour_jabber_send_presence(pb, show, stripped, offline);
+
       /* If going offline, also send stream end */
       if (offline && bb->conversation->socket >= 0) {
         size_t len = strlen(STREAM_END);
@@ -1204,50 +1059,8 @@ bonjour_set_status(PurpleAccount *account, PurpleStatus *status)
 static void
 bonjour_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group)
 {
-  const char *protocol_id = purple_account_get_protocol_id(gc->account);
-
-  /* Check if this is Barev mode */
-  if (protocol_id && (strstr(protocol_id, "barev") || strstr(protocol_id, "prpl-barev"))) {
-    barev_add_buddy(gc, buddy, group);
-    return;
-  }
-
-  /* Standard Bonjour mode */
-  BonjourData *bd = purple_connection_get_protocol_data(gc);
-  BonjourBuddy *bb;
-
-  if (purple_buddy_get_protocol_data(buddy) != NULL) {
-    return;
-  }
-
-  /* Check if we have dns_sd_data - in Barev mode we might not */
-  if (!bd->dns_sd_data) {
-    purple_debug_warning("bonjour", "No DNS-SD data available\n");
-    return;
-  }
-
-  /* For standard Bonjour, we need different handling */
-  /* Since bonjour_buddy_check expects a BonjourBuddy, not BonjourDnsSd,
-   * we need to check if the buddy exists in discovery */
-
-  /* Create a minimal BonjourBuddy for the check */
-  bb = g_new0(BonjourBuddy, 1);
-  bb->name = g_strdup(purple_buddy_get_name(buddy));
-
-  /* Check if this buddy is valid for Bonjour */
-  if (!bonjour_buddy_check(bb)) {
-    purple_blist_remove_buddy(buddy);
-    g_free(bb->name);
-    g_free(bb);
-    return;
-  }
-
-  /* Clean up temporary buddy */
-  g_free(bb->name);
-  g_free(bb);
-
-  /* For standard Bonjour with mDNS, handle buddy list updates */
-  /* Note: The bonjourdnsssd member may not exist in your version */
+  /* Barev-only build: always use Barev add buddy logic */
+  barev_add_buddy(gc, buddy, group);
 }
 
 static void bonjour_remove_buddy(PurpleConnection *pc, PurpleBuddy *buddy, PurpleGroup *group) {
@@ -1335,12 +1148,11 @@ bonjour_convo_closed(PurpleConnection *connection, const char *who)
 static
 void bonjour_set_buddy_icon(PurpleConnection *conn, PurpleStoredImage *img)
 {
-  BonjourData *bd = conn->proto_data;
-  //bonjour_dns_sd_update_buddy_icon(bd->dns_sd_data);
-  if (bd && bd->dns_sd_data)
-   bonjour_dns_sd_update_buddy_icon(bd->dns_sd_data);
+  (void)conn;
+  (void)img;
+  /* Barev-only: we don't publish buddy icons via mDNS.
+   * If we want avatars later, we'll do it via XMPP/Barev mechanisms. */
 }
-
 
 static char *
 bonjour_status_text(PurpleBuddy *buddy)

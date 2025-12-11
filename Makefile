@@ -16,9 +16,6 @@ GLIB_LIBS      := $(shell pkg-config --libs glib-2.0)
 LIBXML_CFLAGS  := $(shell pkg-config --cflags libxml-2.0)
 LIBXML_LIBS    := $(shell pkg-config --libs libxml-2.0)
 
-AVAHI_CFLAGS   := $(shell pkg-config --cflags avahi-client avahi-glib)
-AVAHI_LIBS     := $(shell pkg-config --libs   avahi-client avahi-glib)
-
 # Final compiler & linker flags
 CFLAGS += $(WARN) $(PICFLAG) \
           $(PURPLE_CFLAGS) $(GLIB_CFLAGS) $(LIBXML_CFLAGS) $(AVAHI_CFLAGS)
@@ -31,8 +28,6 @@ SRCS = \
   bonjour.c \
   buddy.c \
   jabber.c \
-  mdns_avahi.c \
-  mdns_common.c \
   parser.c \
   bonjour_ft.c
 
