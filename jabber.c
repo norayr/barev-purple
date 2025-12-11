@@ -1383,11 +1383,10 @@ _server_socket_handler(gpointer data, int server_socket, PurpleInputCondition co
 
   /* If no buddy matches, reject immediately */
   if (mbba->matched_buddies == NULL) {
-    //purple_debug_warning("bonjour", "Rejecting connection from unknown IP: %s\n", address_text);
-    //close(client_socket);
-    //g_free(mbba);
-    //return;
     purple_debug_warning("bonjour", "Rejecting connection from unknown IP: %s\n", address_text);
+    close(client_socket);
+    g_free(mbba);
+    return;
   }
 
   /* Clean up match structure */
