@@ -77,26 +77,38 @@ is_socket_really_connected(int socket_fd)
     if (socket_fd < 0)
         return FALSE;
 
-    /* Check if socket has any errors */
+    /* Check for pending socket errors */
     if (getsockopt(socket_fd, SOL_SOCKET, SO_ERROR, &error, &len) != 0) {
-        return FALSE; /* getsockopt failed */
+        return FALSE; /* getsockopt itself failed */
     }
 
     if (error != 0) {
-        return FALSE; /* Socket has error */
+        /* Socket has an error, consider it dead */
+        errno = error;
+        return FALSE;
     }
 
-    /* Try to peek at the socket */
+    /* Try to peek a byte */
     char buf;
     int result = recv(socket_fd, &buf, 1, MSG_PEEK | MSG_DONTWAIT);
 
-    /* Socket is good if we can peek or get EAGAIN/EWOULDBLOCK */
-    if (result >= 0)
-        return TRUE;
-    if (errno == EAGAIN || errno == EWOULDBLOCK)
+    /*
+     * recv() semantics:
+     *   > 0 : there is data -> definitely alive
+     *   == 0: orderly shutdown (EOF) -> closed
+     *   < 0 : error; EAGAIN/EWOULDBLOCK means "no data now" but socket OK
+     */
+    if (result > 0)
         return TRUE;
 
-    return FALSE;
+    if (result == 0)
+        return FALSE; /* closed by peer */
+
+    /* result < 0 */
+    if (errno == EAGAIN || errno == EWOULDBLOCK)
+        return TRUE;  /* no data yet, but socket is fine */
+
+    return FALSE;      /* real error */
 }
 
 /* Parse buddy string in format: nick@ipv6_address */
@@ -213,8 +225,13 @@ static gboolean
 barev_auto_connect_timer(gpointer data)
 {
   PurpleConnection *gc = data;
-  BonjourData *bd = gc->proto_data;
+  BonjourData *bd;
   GSList *buddies;
+
+  if (!gc)
+    return FALSE;
+
+  bd = gc->proto_data;
 
   if (!PURPLE_CONNECTION_IS_CONNECTED(gc) || !bd || !bd->jabber_data)
     return FALSE;
@@ -239,43 +256,43 @@ barev_auto_connect_timer(gpointer data)
       continue;
     }
 
-    /* Skip if already connected */
     if (bb->conversation) {
-    /* Actually check if socket is connected! */
-    int error = 0;
-    socklen_t len = sizeof(error);
-    gboolean is_connected = FALSE;
+      BonjourJabberConversation *bconv = bb->conversation;
 
-    if (bb->conversation->socket >= 0) {
-        if (getsockopt(bb->conversation->socket, SOL_SOCKET, SO_ERROR, &error, &len) == 0 && error == 0) {
-            char buf;
-            int result = recv(bb->conversation->socket, &buf, 1, MSG_PEEK | MSG_DONTWAIT);
-            /* recv returns: 0 = closed, -1 = error/no data, >0 = data */
-            if (result > 0) {
-                is_connected = TRUE;
-            } else if (result == 0) {
-                is_connected = FALSE; /* 0 means closed! */
-            } else {
-                is_connected = (errno == EAGAIN || errno == EWOULDBLOCK);
-            }
-        }
-      }
-        if (is_connected) {
-        purple_debug_info("bonjour", "Barev: buddy %s really connected\n", who);
+      /*
+       * Don't claim "really connected" if the XMPP stream has never started.
+       * That means connect() may still be in progress, or the peer never answered.
+       */
+      if (!bconv->recv_stream_start) {
+        purple_debug_info("bonjour",
+                          "Barev: buddy %s has pending conversation (no stream yet), not treating as connected\n",
+                          who ? who : "(null)");
         continue;
-      } else {
-        /* Dead connection - clean it up! */
-        purple_debug_info("bonjour", "Barev: buddy %s has DEAD connection, cleaning\n", who);
-        if (bb->conversation->socket >= 0)
-            close(bb->conversation->socket);
-        bonjour_jabber_close_conversation(bb->conversation);
-        bb->conversation = NULL;
       }
+
+      if (bconv->socket >= 0 && is_socket_really_connected(bconv->socket)) {
+        purple_debug_info("bonjour",
+                          "Barev: buddy %s really connected\n",
+                          who ? who : "(null)");
+        continue;
+      }
+
+      /* Socket or stream is dead – clean up and let the loop reconnect */
+      purple_debug_info("bonjour",
+                        "Barev: buddy %s has DEAD connection, cleaning\n",
+                        who ? who : "(null)");
+
+      if (bconv->socket >= 0) {
+        close(bconv->socket);
+        bconv->socket = -1;
+      }
+
+      bonjour_jabber_close_conversation(bconv);
+      bb->conversation = NULL;
     }
 
-
     purple_debug_info("bonjour", "Barev: attempting connection to %s at %s\n",
-                      who, (char*)bb->ips->data);
+                      who ? who : "(null)", (char *)bb->ips->data);
 
     /* Just ensure a stream/connection exists */
     bonjour_jabber_open_stream(bd->jabber_data, purple_buddy_get_name(pb));
@@ -306,8 +323,13 @@ static gboolean
 barev_reconnect_cb(gpointer data)
 {
   PurpleConnection *gc = data;
-  BonjourData *bd = gc->proto_data;
+  BonjourData *bd;
   GSList *buddies;
+
+  if (!gc)
+    return FALSE;
+
+  bd = gc->proto_data;
 
   if (!PURPLE_CONNECTION_IS_CONNECTED(gc) || !bd || !bd->jabber_data)
     return FALSE;
@@ -332,28 +354,40 @@ barev_reconnect_cb(gpointer data)
       continue;
     }
 
-    /* FIXED: Actually check if socket is connected! */
     if (bb->conversation) {
-      if (bb->conversation->socket >= 0 && is_socket_really_connected(bb->conversation->socket)) {
-        purple_debug_info("bonjour", "Barev: buddy %s really connected (socket %d)\n",
-                          who ? who : "(null)", bb->conversation->socket);
-        continue;
-      } else {
-        /* Socket is dead, clean up! */
-        purple_debug_info("bonjour", "Barev: buddy %s has DEAD connection, cleaning up\n",
+      BonjourJabberConversation *bconv = bb->conversation;
+
+      /* Again: don't call it “really connected” if stream never started. */
+      if (!bconv->recv_stream_start) {
+        purple_debug_info("bonjour",
+                          "Barev: buddy %s has pending conversation (no stream yet), not treating as connected\n",
                           who ? who : "(null)");
-        if (bb->conversation->socket >= 0) {
-          close(bb->conversation->socket);
-          bb->conversation->socket = -1;
-        }
-        bonjour_jabber_close_conversation(bb->conversation);
-        bb->conversation = NULL;
-        /* Fall through to reconnect */
+        continue;
       }
+
+      if (bconv->socket >= 0 && is_socket_really_connected(bconv->socket)) {
+        purple_debug_info("bonjour",
+                          "Barev: buddy %s really connected (socket %d)\n",
+                          who ? who : "(null)", bconv->socket);
+        continue;
+      }
+
+      purple_debug_info("bonjour",
+                        "Barev: buddy %s has DEAD connection, cleaning up\n",
+                        who ? who : "(null)");
+
+      if (bconv->socket >= 0) {
+        close(bconv->socket);
+        bconv->socket = -1;
+      }
+
+      bonjour_jabber_close_conversation(bconv);
+      bb->conversation = NULL;
+      /* Fall through to reconnect below */
     }
 
     purple_debug_info("bonjour", "Barev: attempting connection to %s at %s\n",
-                      who, (char*)bb->ips->data);
+                      who ? who : "(null)", (char *)bb->ips->data);
 
     /* Just ensure a stream/connection exists */
     bonjour_jabber_open_stream(bd->jabber_data, purple_buddy_get_name(pb));
@@ -362,53 +396,6 @@ barev_reconnect_cb(gpointer data)
   g_slist_free(buddies);
   return TRUE;
 }
-//static gboolean
-//barev_reconnect_cb(gpointer data)
-//{
-//  PurpleConnection *gc = data;
-//  PurpleAccount *account;
-//  BonjourData *bd;
-//  PurpleBlistNode *node;
-//
-//  if (!gc)
-//    return FALSE;
-//
-//  account = purple_connection_get_account(gc);
-//  bd = gc->proto_data;
-//
-//  if (!account || !bd || !bd->jabber_data)
-//    return FALSE; /* stop timer */
-//
-//  for (node = purple_blist_get_root(); node;
-//       node = purple_blist_node_next(node, FALSE)) {
-//
-//    if (!PURPLE_BLIST_NODE_IS_BUDDY(node))
-//      continue;
-//
-//    PurpleBuddy *buddy = (PurpleBuddy *)node;
-//    if (purple_buddy_get_account(buddy) != account)
-//      continue;
-//
-//    if (!barev_should_autoconnect_buddy(buddy))
-//      continue;
-//
-//    BonjourBuddy *bb = purple_buddy_get_protocol_data(buddy);
-//    if (!bb || !bb->ips)
-//      continue;
-//
-//    const char *who = purple_buddy_get_name(buddy);
-//
-//    purple_debug_info("bonjour", "Barev: auto-connecting to %s\n",
-//                      who ? who : "(null)");
-//
-//    /* Try to open / re-open the stream */
-//    bonjour_jabber_open_stream(bd->jabber_data, who);
-//  }
-//
-//  return TRUE; /* keep timer */
-//}
-
-
 
 static gchar * barev_contacts_filename(PurpleAccount *account)
 {
