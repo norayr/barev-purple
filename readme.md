@@ -81,7 +81,7 @@ Currently, if you want to change your contact's port, you need to
 
 but nice to have
 
-avatars, audio/video.
+audio/video.
 no mucs.
 
 # Dreams
