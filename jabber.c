@@ -195,7 +195,7 @@ barev_userinfo_add_avatar(PurpleNotifyUserInfo *info, xmlnode *vcard)
     }
 
     /*
-     * IMPORTANT: Pidgin turns <img ...> without id into a link.
+     * Pidgin turns <img ...> without id into a link.
      * So we embed <img id="..."> referencing imgstore.
      */
     html = g_strdup_printf("<img id=\"%d\" alt=\"avatar\"/>", img_id);
@@ -215,23 +215,34 @@ static void barev_vcard_req_free(BarevVcardReq *r)
 
 static GHashTable *barev_vcard_userinfo = NULL;
 
-void
+gboolean
 bonjour_jabber_request_vcard(PurpleBuddy *pb, gboolean for_userinfo)
 {
     BonjourBuddy *bb;
+    BonjourJabberConversation *bconv;
     PurpleAccount *account;
     const char *from, *to;
     xmlnode *iq, *vcard;
     gchar *id, *xml;
 
-    if (!pb) return;
+    if (!pb)
+        return FALSE;
 
     bb = purple_buddy_get_protocol_data(pb);
-    if (!bb || !bb->conversation || bb->conversation->socket < 0) {
-        purple_debug_warning("bonjour", "vCard request: no active conversation for %s\n",
-                             purple_buddy_get_name(pb));
-        return;
-    }
+    if (!bb || !bb->conversation)
+        return FALSE;
+
+    bconv = bb->conversation;
+
+    /* Must be a real, fully-started stream (not a pending connect) */
+    if (bconv->socket < 0)
+        return FALSE;
+
+    if (bconv->connect_data != NULL)
+        return FALSE;
+
+    if (bconv->sent_stream_start != FULLY_SENT || !bconv->recv_stream_start)
+        return FALSE;
 
     account = purple_buddy_get_account(pb);
     from = account ? bonjour_get_jid(account) : "";
@@ -241,8 +252,10 @@ bonjour_jabber_request_vcard(PurpleBuddy *pb, gboolean for_userinfo)
 
     if (for_userinfo) {
         if (!barev_vcard_userinfo) {
-            barev_vcard_userinfo = g_hash_table_new_full(g_str_hash, g_str_equal,
-                                                         g_free, (GDestroyNotify)barev_vcard_req_free);
+            barev_vcard_userinfo = g_hash_table_new_full(
+                g_str_hash, g_str_equal,
+                g_free, (GDestroyNotify)barev_vcard_req_free
+            );
         }
         BarevVcardReq *r = g_new0(BarevVcardReq, 1);
         r->account = account;
@@ -267,8 +280,9 @@ bonjour_jabber_request_vcard(PurpleBuddy *pb, gboolean for_userinfo)
 
     g_free(xml);
     g_free(id);
-}
 
+    return TRUE;
+}
 
 static gchar *
 barev_guess_mime_type(const guchar *data, gsize len)
@@ -564,8 +578,6 @@ barev_handle_vcard_iq(xmlnode *packet, PurpleBuddy *pb)
                         purple_notify_user_info_add_pair_plaintext(info, "Avatar SHA1", bb->phsh);
                 }
 
-                //purple_notify_userinfo(gc, r->who, info, NULL, NULL);
-                //purple_notify_user_info_destroy(info);
                 int avatar_id = 0;
                 BarevUserInfoCloseData *cd = NULL;
                 avatar_id = barev_userinfo_add_avatar(info, vcard);
@@ -1072,7 +1084,7 @@ bonjour_jabber_process_packet(PurpleBuddy *pb, xmlnode *packet)
             id && g_str_has_prefix(id, "ping-")) {
             if (bb && bb->conversation)
                 bonjour_jabber_handle_ping_response(packet, bb->conversation);
-            return; /* IMPORTANT: don't fall into xep_iq_parse */
+            return; /* don't fall into xep_iq_parse */
         }
 
         /* vCard avatars? */
@@ -1620,7 +1632,6 @@ void
 bonjour_jabber_stream_ended(BonjourJabberConversation *bconv)
 {
   BonjourBuddy *bb = NULL;
-  /* REMOVED: const char *name = NULL; */
 
   purple_debug_info("bonjour", "Received conversation close notification from %s\n",
     bconv->pb ? purple_buddy_get_name(bconv->pb) :
@@ -2735,6 +2746,7 @@ bonjour_jabber_send_message(BonjourJabber *jdata, const gchar *to, const gchar *
 static gboolean
 _async_bonjour_jabber_close_conversation_cb(gpointer data) {
   BonjourJabberConversation *bconv = data;
+  bconv->close_timeout = 0;
   bonjour_jabber_close_conversation(bconv);
   return FALSE;
 }
@@ -2834,9 +2846,10 @@ bonjour_jabber_close_conversation(BonjourJabberConversation *bconv)
     if (bconv->context != NULL)
       bonjour_parser_setup(bconv);
 
-    if (bconv->close_timeout != 0)
+    if (bconv->close_timeout != 0){
       purple_timeout_remove(bconv->close_timeout);
-
+      bconv->close_timeout = 0;
+    }
     g_free(bconv->buddy_name);
     g_free(bconv->ip);
     g_free(bconv);

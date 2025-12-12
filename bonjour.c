@@ -1644,15 +1644,12 @@ bonjour_get_info(PurpleConnection *gc, const char *who)
     if (pb)
         bb = purple_buddy_get_protocol_data(pb);
 
-    /*
-     * If we have a live stream, do NOT show a "minimal" window first.
-     * Ask for vCard and the vCard result handler will show the userinfo popup
-     * (which we now augment with the <img> avatar).
-     */
-    if (pb && bb && bb->conversation && bb->conversation->socket >= 0) {
-        bonjour_jabber_request_vcard(pb, TRUE);
-        return;
-    }
+     if (pb && bb && bb->conversation && bb->conversation->socket >= 0) {
+         /* Only go into the async "Retrieving..." path if we truly sent the IQ */
+         if (bonjour_jabber_request_vcard(pb, TRUE))
+             return;
+     }
+
 
     /* No stream: show whatever we know locally */
     info = purple_notify_user_info_new();

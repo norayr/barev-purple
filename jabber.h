@@ -136,5 +136,5 @@ void bonjour_jabber_start_ping(BonjourJabberConversation *bconv);
 void bonjour_jabber_stop_ping(BonjourJabberConversation *bconv);
 gboolean bonjour_jabber_handle_ping(xmlnode *packet, BonjourJabberConversation *bconv);
 void bonjour_jabber_send_ping_request(BonjourJabberConversation *bconv);
-void bonjour_jabber_request_vcard(PurpleBuddy *pb, gboolean for_userinfo);
+gboolean bonjour_jabber_request_vcard(PurpleBuddy *pb, gboolean for_userinfo);
 #endif /* _BONJOUR_JABBER_H_ */
