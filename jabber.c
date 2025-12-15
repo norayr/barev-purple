@@ -365,45 +365,6 @@ barev_presence_add_avatar_update(xmlnode *presence_node, PurpleAccount *account)
     g_free(sha1);
 }
 
-//static void
-//barev_send_vcard_get(PurpleBuddy *pb)
-//{
-//    BonjourBuddy *bb;
-//    PurpleAccount *account;
-//    const char *from, *to;
-//    xmlnode *iq, *vcard;
-//    gchar *id, *xml;
-//
-//    if (!pb) return;
-//
-//    bb = purple_buddy_get_protocol_data(pb);
-//    if (!bb || !bb->conversation || bb->conversation->socket < 0)
-//        return;
-//
-//    account = purple_buddy_get_account(pb);
-//    from = account ? bonjour_get_jid(account) : "";
-//    to   = purple_buddy_get_name(pb);
-//
-//    id = barev_make_iq_id("vcard");
-//
-//    iq = xmlnode_new("iq");
-//    xmlnode_set_attrib(iq, "type", "get");
-//    xmlnode_set_attrib(iq, "id", id);
-//    if (from && *from) xmlnode_set_attrib(iq, "from", from);
-//    if (to   && *to)   xmlnode_set_attrib(iq, "to", to);
-//
-//    vcard = xmlnode_new_child(iq, "vCard");
-//    xmlnode_set_namespace(vcard, BAREV_VCARD_NS);
-//
-//    xml = xmlnode_to_str(iq, NULL);
-//    xmlnode_free(iq);
-//
-//    _send_data(pb, xml);
-//
-//    g_free(xml);
-//    g_free(id);
-//}
-
 static void
 barev_clear_buddy_icon(PurpleBuddy *pb, BonjourBuddy *bb)
 {
@@ -2965,32 +2926,6 @@ xep_iq_new(void *data, XepIqType type, const char *to, const char *from, const c
 
   return iq;
 }
-
-//static gboolean
-//check_if_blocked(PurpleBuddy *pb)
-//{
-//  gboolean blocked = FALSE;
-//  GSList *l = NULL;
-//  PurpleAccount *acc = purple_buddy_get_account(pb);
-//
-//  if(acc == NULL)
-//    return FALSE;
-//
-//  acc = purple_buddy_get_account(pb);
-//
-//  for(l = acc->deny; l != NULL; l = l->next) {
-//    const gchar *name = purple_buddy_get_name(pb);
-//    const gchar *username = bonjour_get_jid(acc);
-//
-//    if(!purple_utf8_strcasecmp(name, (char *)l->data)) {
-//      purple_debug_info("bonjour", "%s has been blocked by %s.\n", name, username);
-//      blocked = TRUE;
-//      break;
-//    }
-//  }
-//  return blocked;
-//}
-
 
 int
 xep_iq_send_and_free(XepIq *iq)

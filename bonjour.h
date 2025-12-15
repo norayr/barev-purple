@@ -39,7 +39,7 @@
 #define BONJOUR_STATUS_ID_BUSY      "busy"
 
 #define BONJOUR_DEFAULT_PORT 5299
-#define BAREV_CHATSTATE_TIMEOUT_SECONDS 2
+#define BAREV_CHATSTATE_TIMEOUT_SECONDS 1
 
 typedef struct _BonjourDnsSd BonjourDnsSd;
 typedef struct _BonjourData
