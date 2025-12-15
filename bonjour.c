@@ -50,6 +50,9 @@
 #include <errno.h>
 #include <sys/socket.h>
 
+#define BAREV_CHATSTATE_TIMEOUT_SECONDS 4
+
+
 typedef struct {
   PurpleConnection *pc;
   PurpleBuddy *buddy;
@@ -89,7 +92,7 @@ bonjour_send_typing(PurpleConnection *gc, const char *who, PurpleTypingState sta
     bonjour_jabber_send_typing(pb, state);
 
     /* libpurple expects “how long until you consider it stale” */
-    return 10;
+    return BAREV_CHATSTATE_TIMEOUT_SECONDS;
 }
 
 /* Helper function to check if a socket is really connected */
