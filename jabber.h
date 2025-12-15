@@ -32,6 +32,7 @@
 
 #include "account.h"
 #include "circbuffer.h"
+#include "libpurple/server.h"  /* PurpleTypingState */
 
 #define STREAM_END "</stream:stream>"
 
@@ -137,4 +138,5 @@ void bonjour_jabber_stop_ping(BonjourJabberConversation *bconv);
 gboolean bonjour_jabber_handle_ping(xmlnode *packet, BonjourJabberConversation *bconv);
 void bonjour_jabber_send_ping_request(BonjourJabberConversation *bconv);
 gboolean bonjour_jabber_request_vcard(PurpleBuddy *pb, gboolean for_userinfo);
+void bonjour_jabber_send_typing(PurpleBuddy *pb, PurpleTypingState state);
 #endif /* _BONJOUR_JABBER_H_ */

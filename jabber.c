@@ -1305,6 +1305,24 @@ _jabber_parse_and_write_message_to_ui(xmlnode *message_node, PurpleBuddy *pb)
   body_node = xmlnode_get_child(message_node, "body");
   html_node = xmlnode_get_child(message_node, "html");
 
+    /* XEP-0085 chat states */
+  xmlnode *cs = xmlnode_get_child_with_namespace(message_node, "composing",
+                     "http://jabber.org/protocol/chatstates");
+  if (cs) {
+      PurpleConnection *gc = purple_account_get_connection(purple_buddy_get_account(pb));
+      serv_got_typing(gc, purple_buddy_get_name(pb), 10, PURPLE_TYPING);
+      return;
+  }
+
+  cs = xmlnode_get_child_with_namespace(message_node, "active",
+                     "http://jabber.org/protocol/chatstates");
+  if (cs) {
+      PurpleConnection *gc = purple_account_get_connection(purple_buddy_get_account(pb));
+      serv_got_typing_stopped(gc, purple_buddy_get_name(pb));
+      return;
+  }
+
+
   if (body_node == NULL && html_node == NULL) {
     purple_debug_error("bonjour", "No body or html node found, discarding message.\n");
     return;
@@ -3173,3 +3191,46 @@ gboolean bonjour_jabber_handle_ping(xmlnode *packet, BonjourJabberConversation *
 
   return FALSE;
 }
+
+void
+bonjour_jabber_send_typing(PurpleBuddy *pb, PurpleTypingState state)
+{
+    BonjourBuddy *bb;
+    BonjourJabber *jdata;
+    xmlnode *message_node, *cs;
+    gchar *xml;
+    const char *from;
+
+    if (!pb) return;
+
+    bb = purple_buddy_get_protocol_data(pb);
+    if (!bb || !bb->conversation || !bb->conversation->account ||
+        !bb->conversation->account->gc || !bb->conversation->account->gc->proto_data)
+        return;
+
+    jdata = ((BonjourData*) bb->conversation->account->gc->proto_data)->jabber_data;
+    if (!jdata) return;
+
+    message_node = xmlnode_new("message");
+    xmlnode_set_attrib(message_node, "to", bb->name ? bb->name : "");
+
+    from = bonjour_get_jid(jdata->account);
+    xmlnode_set_attrib(message_node, "from", from ? from : "");
+    xmlnode_set_attrib(message_node, "type", "chat");
+
+    /* XEP-0085 chat states */
+    if (state == PURPLE_TYPING) {
+        cs = xmlnode_new_child(message_node, "composing");
+    } else {
+        /* treat everything else as “not typing” */
+        cs = xmlnode_new_child(message_node, "active");
+    }
+    xmlnode_set_namespace(cs, "http://jabber.org/protocol/chatstates");
+
+    xml = xmlnode_to_str(message_node, NULL);
+    xmlnode_free(message_node);
+
+    _send_data(pb, xml);
+    g_free(xml);
+}
+

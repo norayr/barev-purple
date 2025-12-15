@@ -45,6 +45,7 @@
 #include <request.h> //for purple_request_fields
 #include <blist.h> // for barev
 #include <eventloop.h>
+#include "libpurple/server.h" //for typing notifications
 
 #include <errno.h>
 #include <sys/socket.h>
@@ -67,6 +68,29 @@ typedef struct {
   char *ipv6_address;
   int port;
 } BarevBuddyInfo;
+
+static unsigned int
+bonjour_send_typing(PurpleConnection *gc, const char *who, PurpleTypingState state)
+{
+    PurpleAccount *account;
+    PurpleBuddy *pb;
+    BonjourBuddy *bb;
+
+    if (!gc || !who) return 0;
+
+    account = purple_connection_get_account(gc);
+    pb = purple_find_buddy(account, who);
+    if (!pb) return 0;
+
+    bb = purple_buddy_get_protocol_data(pb);
+    if (!bb) return 0;
+
+    /* Send a pure chat-state message (no body) */
+    bonjour_jabber_send_typing(pb, state);
+
+    /* libpurple expects “how long until you consider it stale” */
+    return 10;
+}
 
 /* Helper function to check if a socket is really connected */
 static gboolean
@@ -1353,8 +1377,8 @@ static PurplePluginProtocolInfo prpl_info =
   bonjour_close,                                           /* close */
   bonjour_send_im,                                         /* send_im */
   NULL,                                                    /* set_info */
-  NULL,                                                    /* send_typing */
-  bonjour_get_info,                                                    /* get_info */
+  bonjour_send_typing,                                     /* send_typing */
+  bonjour_get_info,                                        /* get_info */
   bonjour_set_status,                                      /* set_status */
   NULL,                                                    /* set_idle */
   NULL,                                                    /* change_passwd */
