@@ -136,7 +136,7 @@ Connection keepalive:
 ### 7. **XEP-0085: Chat State Notifications**
 Typing indicators:
 - `<composing/>` element in `jabber:x:event` namespace
-- Currently partially implemented (parsed but not fully utilized)
+- implemented.
 
 ### 8. **XEP-0004: Data Forms**
 Form-based data negotiation:
