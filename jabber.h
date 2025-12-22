@@ -66,6 +66,7 @@ typedef struct _BonjourJabberConversation
   /* The following are only needed before attaching to a PurpleBuddy */
   gchar *buddy_name;
   gchar *ip;
+  gchar *local_ip;
   /* This points to a data entry in BonjourBuddy->ips */
   const gchar *ip_link;
   /* Ping support */

@@ -627,6 +627,24 @@ safe_set_buddy_status(PurpleAccount *account, const char *who, const char *statu
     }
 }
 
+/* Get the JID for a specific conversation based on its actual source IP */
+static const char *
+bonjour_get_conversation_jid(BonjourJabberConversation *bconv)
+{
+    static char jid_buf[512];
+    const char *username = purple_account_get_username(bconv->account);
+
+    if (bconv->local_ip && *bconv->local_ip) {
+        g_snprintf(jid_buf, sizeof(jid_buf), "%s@%s", username, bconv->local_ip);
+    } else {
+        /* Fallback to account-wide JID */
+        const char *global_jid = bonjour_get_jid(bconv->account);
+        g_strlcpy(jid_buf, global_jid, sizeof(jid_buf));
+    }
+
+    return jid_buf;
+}
+
 /* Validate that JID IP matches actual connection IP */
 static gboolean
 validate_ip_consistency(BonjourJabberConversation *bconv, const char *from_jid)
@@ -1817,7 +1835,7 @@ static gboolean bonjour_jabber_send_stream_init(BonjourJabberConversation *bconv
   if (bname == NULL)
     bname = "";
 
-  stream_start = g_strdup_printf(DOCTYPE, bonjour_get_jid(bconv->account), bname);
+  stream_start = g_strdup_printf(DOCTYPE, bonjour_get_conversation_jid(bconv), bname);
   len = strlen(stream_start);
 
   bconv->sent_stream_start = PARTIALLY_SENT;
@@ -2220,6 +2238,24 @@ _connected_to_buddy(gpointer data, gint source, const gchar *error)
     return;
   }
 
+  /* Detect the actual source IP for incoming connection */
+  struct sockaddr_storage local_addr;
+  socklen_t addr_len = sizeof(local_addr);
+  if (getsockname(source, (struct sockaddr *)&local_addr, &addr_len) == 0) {
+      if (local_addr.ss_family == AF_INET6) {
+          char local_ip[INET6_ADDRSTRLEN];
+          struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *)&local_addr;
+          inet_ntop(AF_INET6, &addr6->sin6_addr, local_ip, INET6_ADDRSTRLEN);
+
+          char *percent = strchr(local_ip, '%');
+          if (percent) *percent = '\0';
+
+          g_free(bb->conversation->local_ip);
+          bb->conversation->local_ip = g_strdup(local_ip);
+          purple_debug_info("bonjour", "Detected source IP for incoming connection: %s\n", local_ip);
+      }
+  }
+
   if (!bonjour_jabber_send_stream_init(bb->conversation, source)) {
     const char *err = g_strerror(errno);
     PurpleConversation *conv = NULL;
@@ -2531,6 +2567,27 @@ _connected_to_buddy_direct(gpointer data, gint socket, PurpleInputCondition cond
     /* Connection successful! */
     purple_debug_info("bonjour", "Direct connection to %s established\n",
                      purple_buddy_get_name(pb));
+
+    /* Detect the actual source IP used by the kernel for this connection */
+    struct sockaddr_storage local_addr;
+    socklen_t addr_len = sizeof(local_addr);
+    if (getsockname(socket, (struct sockaddr *)&local_addr, &addr_len) == 0) {
+        if (local_addr.ss_family == AF_INET6) {
+            char local_ip[INET6_ADDRSTRLEN];
+            struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *)&local_addr;
+            inet_ntop(AF_INET6, &addr6->sin6_addr, local_ip, INET6_ADDRSTRLEN);
+
+            /* Remove scope ID if present */
+            char *percent = strchr(local_ip, '%');
+            if (percent) *percent = '\0';
+
+            g_free(bb->conversation->local_ip);
+            bb->conversation->local_ip = g_strdup(local_ip);
+            purple_debug_info("bonjour", "Detected source IP for connection: %s\n", local_ip);
+        }
+    } else {
+        purple_debug_warning("bonjour", "Failed to detect source IP: %s\n", g_strerror(errno));
+    }
 
     /* Remove the write handler */
     if (bb->conversation->rx_handler) {
@@ -2911,6 +2968,7 @@ bonjour_jabber_close_conversation(BonjourJabberConversation *bconv)
     }
     g_free(bconv->buddy_name);
     g_free(bconv->ip);
+    g_free(bconv->local_ip);
     g_free(bconv);
   }
 }
