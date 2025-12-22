@@ -636,23 +636,28 @@ validate_ip_consistency(BonjourJabberConversation *bconv, const char *from_jid)
     char peer_ip[INET6_ADDRSTRLEN];
     char *at_sign, *jid_ip;
     gboolean valid = FALSE;
+    PurpleBuddy *pb;
+    BonjourBuddy *bb;
 
     if (!from_jid || !bconv || bconv->socket < 0)
         return FALSE;
 
-    /* Extract IP from JID (format: nick@ipv6_address) */
-    at_sign = strchr(from_jid, '@');
-    if (!at_sign) {
-        purple_debug_error("bonjour", "Invalid JID format (no @): %s\n", from_jid);
+    /* Get the buddy and its data */
+    pb = bconv->pb;
+    if (!pb) {
+        purple_debug_warning("bonjour", "validate_ip_consistency: no buddy attached\n");
         return FALSE;
     }
 
-    jid_ip = g_strdup(at_sign + 1);
+    bb = purple_buddy_get_protocol_data(pb);
+    if (!bb) {
+        purple_debug_warning("bonjour", "validate_ip_consistency: no buddy data\n");
+        return FALSE;
+    }
 
     /* Get actual peer IP from socket */
     if (getpeername(bconv->socket, (struct sockaddr *)&peer_addr, &peer_addr_len) != 0) {
         purple_debug_error("bonjour", "Failed to get peer address: %s\n", strerror(errno));
-        g_free(jid_ip);
         return FALSE;
     }
 
@@ -664,33 +669,54 @@ validate_ip_consistency(BonjourJabberConversation *bconv, const char *from_jid)
         char *percent = strchr(peer_ip, '%');
         if (percent) *percent = '\0';
 
+        /* First, check if the connection IP is in the buddy's known IP list */
+        GSList *ip_iter = bb->ips;
+        while (ip_iter) {
+            const char *known_ip = ip_iter->data;
+            if (known_ip && g_ascii_strcasecmp(known_ip, peer_ip) == 0) {
+                purple_debug_info("bonjour",
+                    "IP validation OK: connection from %s is in buddy's IP list\n",
+                    peer_ip);
+                return TRUE;
+            }
+            ip_iter = ip_iter->next;
+        }
+
+        /* If not in the list, check if it matches the JID's IP as a fallback */
+        at_sign = strchr(from_jid, '@');
+        if (!at_sign) {
+            purple_debug_error("bonjour", "Invalid JID format (no @): %s\n", from_jid);
+            return FALSE;
+        }
+
+        jid_ip = g_strdup(at_sign + 1);
+
         /* Compare IPs (case-insensitive for hex) */
         if (g_ascii_strcasecmp(jid_ip, peer_ip) == 0) {
             valid = TRUE;
             purple_debug_info("bonjour", "IP validation OK: JID=%s matches peer\n", jid_ip);
         } else {
             purple_debug_error("bonjour",
-                "IP MISMATCH! JID says '%s' but connected from '%s'. REJECTING!\n",
-                jid_ip, peer_ip);
+                "IP MISMATCH! JID says '%s' but connected from '%s', and '%s' is not in buddy's IP list. REJECTING!\n",
+                jid_ip, peer_ip, peer_ip);
 
             /* Send error response before closing */
             const char *error_msg =
                 "<stream:error>"
                 "<host-unknown xmlns='urn:ietf:params:xml:ns:xmpp-streams'/>"
                 "<text xmlns='urn:ietf:params:xml:ns:xmpp-streams'>"
-                "IP address mismatch: Your JID must match your connection IP"
+                "IP address mismatch: Your JID must match your connection IP or be in known IPs"
                 "</text>"
                 "</stream:error>"
                 "</stream:stream>";
             send(bconv->socket, error_msg, strlen(error_msg), 0);
         }
+
+        g_free(jid_ip);
     }
 
-    g_free(jid_ip);
     return valid;
 }
-
-
 
 /* Helper to format the IPv6 */
 /* Update format_host_for_proxy in jabber.c */
@@ -1891,14 +1917,9 @@ void bonjour_jabber_stream_started(BonjourJabberConversation *bconv) {
       bconv->pb) {
 
     PurpleBuddy *pb = bconv->pb;
-    PurpleAccount *account = bconv->account;
     BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
 
     if (bb) {
-            purple_prpl_got_user_status(account,
-                                        purple_buddy_get_name(pb),
-                                        BONJOUR_STATUS_ID_AVAILABLE,
-                                        NULL);
       /* Start ping mechanism */
       bonjour_jabber_start_ping(bconv);
     }
