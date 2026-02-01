@@ -67,6 +67,8 @@ typedef struct _BonjourJabberConversation
   gchar *buddy_name;
   gchar *ip;
   gchar *local_ip;
+  /* Remote destination port fo outgoing connections; -1 if unknown (incoming). */
+  gint remote_port;
   /* This points to a data entry in BonjourBuddy->ips */
   const gchar *ip_link;
   /* Ping support */

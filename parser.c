@@ -63,6 +63,19 @@ buddy_name_allows_ip(PurpleAccount *account, const char *name, const char *ip)
 }
 
 static gboolean
+ip_in_list(GSList *ips, const char *ip)
+{
+    GSList *it;
+    if (!ips || !ip) return FALSE;
+    for (it = ips; it; it = it->next) {
+        if (it->data && g_strcmp0((const char *)it->data, ip) == 0)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+
+static gboolean
 parse_from_attrib_and_find_buddy(BonjourJabberConversation *bconv, int nb_attributes, const xmlChar **attributes) {
   int i;
 
@@ -81,6 +94,49 @@ parse_from_attrib_and_find_buddy(BonjourJabberConversation *bconv, int nb_attrib
               BonjourBuddy *bb = purple_buddy_get_protocol_data(bconv->pb);
 
               if (bb && bb->ips && bconv->ip) {
+
+                  /*
+                   * Barev multi-identity: if the peer *claims* a JID that exists in our roster
+                   * and that buddy allows this IP, then bind to the claimed JID.
+                   */
+                  PurpleBuddy *claimed_pb = purple_find_buddy(bconv->account, from_jid);
+                  if (claimed_pb) {
+                      BonjourBuddy *claimed_bb = purple_buddy_get_protocol_data(claimed_pb);
+                      if (claimed_bb && claimed_bb->ips && ip_in_list(claimed_bb->ips, bconv->ip)) {
+
+                          /* If this conversation is an outgoing connection, enforce roster port too. */
+                          if (bconv->remote_port > 0 && claimed_bb->port_p2pj > 0 && claimed_bb->port_p2pj != bconv->remote_port) {
+                              purple_debug_warning("bonjour",
+                                  "Port mismatch for claimed JID %s: roster port %d, connected port %d (not rebinding)\n",
+                                  from_jid, claimed_bb->port_p2pj, bconv->remote_port);
+                              /* keep current buddy */
+                          }
+                          else
+                          {
+
+                            purple_debug_info("bonjour",
+                              "Stream 'from=%s' differs from connected buddy '%s', "
+                              "but claimed JID is a known buddy for IP %s. Rebinding to claimed JID.\n",
+                              from_jid, current_buddy_name, bconv->ip);
+
+                            /* Clear old association before rebinding */
+                            if (bb && bb->conversation == bconv)
+                                bb->conversation = NULL;
+                            bconv->pb = NULL;
+
+                            if (bconv->buddy_name) {
+                                g_free(bconv->buddy_name);
+                                bconv->buddy_name = NULL;
+                            }
+                            bconv->buddy_name = g_strdup(from_jid);
+
+                            bonjour_jabber_conv_match_by_name(bconv);
+                            g_free(from_jid);
+                            return TRUE;
+                          }
+                      }
+                  }
+
                   /* Check if connection IP matches current buddy's IP list */
                   GSList *ip_iter = bb->ips;
                   gboolean current_buddy_ip_matches = FALSE;

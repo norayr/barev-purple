@@ -692,6 +692,14 @@ validate_ip_consistency(BonjourJabberConversation *bconv, const char *from_jid)
         while (ip_iter) {
             const char *known_ip = ip_iter->data;
             if (known_ip && g_ascii_strcasecmp(known_ip, peer_ip) == 0) {
+                /* If this conversation knows the remote destination port (outgoing), enforce it too. */
+                if (bconv->remote_port > 0 && bb->port_p2pj > 0 && bb->port_p2pj != bconv->remote_port) {
+                    purple_debug_warning("bonjour",
+                        "Port mismatch for %s: roster port %d, connected port %d (rejecting)\n",
+                        purple_buddy_get_name(pb), bb->port_p2pj, bconv->remote_port);
+                    return FALSE;
+                }
+
                 purple_debug_info("bonjour",
                     "IP validation OK: connection from %s is in buddy's IP list\n",
                     peer_ip);
@@ -711,6 +719,17 @@ validate_ip_consistency(BonjourJabberConversation *bconv, const char *from_jid)
 
         /* Compare IPs (case-insensitive for hex) */
         if (g_ascii_strcasecmp(jid_ip, peer_ip) == 0) {
+
+            /* Enforce roster port if this is an outgoing conversation. */
+            if (bconv->remote_port > 0 && bb->port_p2pj > 0 && bb->port_p2pj != bconv->remote_port) {
+                purple_debug_warning("bonjour",
+                    "Port mismatch for %s: roster port %d, connected port %d (rejecting)\n",
+                    purple_buddy_get_name(pb), bb->port_p2pj, bconv->remote_port);
+                g_free(jid_ip);
+                return FALSE;
+            }
+
+
             valid = TRUE;
             purple_debug_info("bonjour", "IP validation OK: JID=%s matches peer\n", jid_ip);
         } else {
@@ -1263,6 +1282,8 @@ bonjour_jabber_conv_new(PurpleBuddy *pb, PurpleAccount *account, const char *ip)
   bconv->pb = pb;
   bconv->account = account;
   bconv->ip = g_strdup(ip);
+
+  bconv->remote_port = -1;
 
   /* Initialize ping fields */
   bconv->ping_timer = 0;
@@ -2695,6 +2716,7 @@ _find_or_start_conversation(BonjourJabber *jdata, const gchar *to)
                     (errno == EINPROGRESS)) {
                     /* Connection successful or in progress */
                     bb->conversation = bonjour_jabber_conv_new(pb, jdata->account, ip);
+                    bb->conversation->remote_port = bb->port_p2pj;
                     purple_debug_info("bonjour", "Setting bb->conversation for %s to %p\n",
                                       purple_buddy_get_name(pb), bb->conversation);
                     bb->conversation->socket = sock;
