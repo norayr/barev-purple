@@ -28,8 +28,39 @@
 #include "debug.h"
 #include "jabber.h"
 #include "parser.h"
+#include "buddy.h"
 #include "util.h"
 #include "xmlnode.h"
+
+/*
+ * Return TRUE if the named buddy exists in roster AND has this IP
+ * in its allowed IP list.
+ */
+static gboolean
+buddy_name_allows_ip(PurpleAccount *account, const char *name, const char *ip)
+{
+  PurpleBuddy *pb;
+  BonjourBuddy *bb;
+  GSList *ip_iter;
+
+  if (!account || !name || !ip)
+    return FALSE;
+
+  pb = purple_find_buddy(account, name);
+  if (!pb)
+    return FALSE;
+
+  bb = purple_buddy_get_protocol_data(pb);
+  if (!bb || !bb->ips)
+    return FALSE;
+
+  for (ip_iter = bb->ips; ip_iter; ip_iter = ip_iter->next) {
+    if (g_strcmp0((const char *)ip_iter->data, ip) == 0)
+      return TRUE;
+  }
+
+  return FALSE;
+}
 
 static gboolean
 parse_from_attrib_and_find_buddy(BonjourJabberConversation *bconv, int nb_attributes, const xmlChar **attributes) {
@@ -64,13 +95,34 @@ parse_from_attrib_and_find_buddy(BonjourJabberConversation *bconv, int nb_attrib
 
                   if (current_buddy_ip_matches) {
                       /* Current buddy is correct by IP. Don't switch! Remote is lying about JID. */
-                      purple_debug_warning("bonjour",
+                      //purple_debug_warning("bonjour",
+                      //    "Stream 'from=%s' doesn't match connected buddy '%s', "
+                      //    "but connection IP %s matches current buddy's IP list. "
+                      //    "Keeping current buddy (remote JID claim rejected).\n",
+                      //    from_jid, current_buddy_name, bconv->ip);
+                      //g_free(from_jid);
+                      //return TRUE;
+                      /*
+                       * Barev: multiple identities may legitimately share one IP.
+                       * If the claimed JID is a known buddy AND that buddy allows this IP,
+                       * prefer the claimed JID. Otherwise keep the current buddy as a spoofing guard.
+                       */
+                      if (!buddy_name_allows_ip(bconv->account, from_jid, bconv->ip)) {
+                          purple_debug_warning("bonjour",
+                              "Stream 'from=%s' doesn't match connected buddy '%s', "
+                              "and connection IP %s matches current buddy's IP list. "
+                              "Claimed JID is not a known buddy for this IP; keeping current buddy.\n",
+                              from_jid, current_buddy_name, bconv->ip);
+                          g_free(from_jid);
+                          return TRUE;
+                      }
+
+                      purple_debug_info("bonjour",
                           "Stream 'from=%s' doesn't match connected buddy '%s', "
-                          "but connection IP %s matches current buddy's IP list. "
-                          "Keeping current buddy (remote JID claim rejected).\n",
+                          "but both buddies allow IP %s. Switching to claimed JID (Barev multi-identity).\n",
                           from_jid, current_buddy_name, bconv->ip);
-                      g_free(from_jid);
-                      return TRUE;
+                      /* fall through: clear old association and re-match by name */
+
                   }
               }
 
