@@ -249,6 +249,83 @@ void bonjour_buddy_got_buddy_icon(BonjourBuddy *buddy, gconstpointer data, gsize
 }
 
 /**
+ * Mark a PurpleBuddy as a persistent contact.
+ * Stores the IP and port as blist node settings and clears the NO_SAVE flag
+ * so Purple will write this buddy into blist.xml.
+ */
+void
+bonjour_buddy_save_to_blist(PurpleBuddy *pb, const char *ip, int port)
+{
+  PurpleBlistNode *node  = (PurpleBlistNode *)pb;
+  PurpleBlistNodeFlags flags;
+
+  /* Clear NO_SAVE so Purple persists this buddy */
+  flags = purple_blist_node_get_flags(node);
+  flags &= ~PURPLE_BLIST_NODE_FLAG_NO_SAVE;
+  purple_blist_node_set_flags(node, flags);
+
+  if (ip && *ip)
+    purple_blist_node_set_string(node, "barev_ip", ip);
+  purple_blist_node_set_int(node, "barev_port", port);
+}
+
+/**
+ * Reconstruct BonjourBuddy protocol data for every buddy that belongs to
+ * *account* and already has a "barev_ip" setting but no protocol_data.
+ *
+ * Purple parses blist.xml before login(), so saved buddies (and their
+ * settings) are already in the tree.  We just attach the protocol_data and
+ * mark the status offline until a real stream proves otherwise.
+ *
+ * Buddies that exist in the tree but do NOT have "barev_ip" are skipped;
+ * the caller's fallback loop will handle them via barev_add_buddy().
+ */
+void
+bonjour_buddies_load_from_blist(PurpleAccount *account)
+{
+  GSList *buddies, *iter;
+
+  buddies = purple_find_buddies(account, NULL);
+
+  for (iter = buddies; iter; iter = iter->next) {
+    PurpleBuddy    *pb   = (PurpleBuddy *)iter->data;
+    PurpleBlistNode*node = (PurpleBlistNode *)pb;
+    const char     *name, *ip;
+    int             port;
+    BonjourBuddy   *bb;
+
+    /* Already initialised (e.g. by the migration step) — skip */
+    if (purple_buddy_get_protocol_data(pb) != NULL)
+      continue;
+
+    /* Only reconstruct buddies we have previously persisted */
+    ip = purple_blist_node_get_string(node, "barev_ip");
+    if (!ip || !*ip)
+      continue;
+
+    port = purple_blist_node_get_int(node, "barev_port");
+    if (port <= 0)
+      port = BONJOUR_DEFAULT_PORT;
+
+    name = purple_buddy_get_name(pb);
+
+    bb             = bonjour_buddy_new(name, account);
+    bb->ips        = g_slist_append(NULL, g_strdup(ip));
+    bb->port_p2pj  = port;
+
+    purple_buddy_set_protocol_data(pb, bb);
+
+    /* Mark offline until a stream is actually established */
+    purple_prpl_got_user_status(account, name, BONJOUR_STATUS_ID_OFFLINE, NULL);
+
+    purple_debug_info("bonjour",
+        "Loaded saved contact from blist: %s ip=%s port=%d\n", name, ip, port);
+  }
+
+  g_slist_free(buddies);
+}
+
+/**
  * Deletes a buddy from memory.
  */
 void

@@ -329,107 +329,99 @@ barev_auto_connect_timer(gpointer data)
   return TRUE;
 }
 
-static gchar * barev_contacts_filename(PurpleAccount *account)
+static gchar *
+barev_contacts_filename(PurpleAccount *account)
 {
-  const char *user_dir = purple_user_dir();
-  const char *accname = purple_account_get_username(account);
-  /* accname for Bonjour is usually machinename, but that’s fine. */
-
+  /* This small helper is only intended for the migration functions below */
+  /* to migrate from ~/.purple/barev-contacts-<username>.txt to just blist.xml */
+  /* Once the migration is done, we may consider removing these functions */
   return g_strdup_printf("%s" G_DIR_SEPARATOR_S "barev-contacts-%s.txt",
-                         user_dir, accname);
+                         purple_user_dir(),
+                         purple_account_get_username(account));
 }
 
-static void barev_load_contacts(PurpleAccount *account)
+/**
+ * One-time migration: if the legacy flat contacts file still exists, read
+ * every entry, create or locate the corresponding PurpleBuddy, persist its
+ * IP and port via bonjour_buddy_save_to_blist(), and then delete the flat
+ * file.  On all subsequent logins the file is gone so the function returns
+ * immediately.
+ */
+static void
+barev_migrate_flat_file_to_blist(PurpleAccount *account)
 {
-    gchar *filename = barev_contacts_filename(account);
-    char *contents = NULL;
-    gsize len = 0;
-    char **lines;
-    guint i;
+    gchar   *filename, *contents = NULL;
+    gsize    len = 0;
+    char   **lines;
+    guint    i;
+    PurpleGroup *group;
+
+    filename = barev_contacts_filename(account);
 
     if (!g_file_get_contents(filename, &contents, &len, NULL)) {
         g_free(filename);
-        return; /* no contacts yet */
+        return;   /* Nothing to migrate */
+    }
+
+    purple_debug_info("bonjour", "Migrating %s to blist.xml\n", filename);
+
+    /* Ensure the destination group exists */
+    group = purple_find_group(BONJOUR_GROUP_NAME);
+    if (!group) {
+        group = purple_group_new(BONJOUR_GROUP_NAME);
+        purple_blist_add_group(group, NULL);
     }
 
     lines = g_strsplit(contents, "\n", 0);
+    for (i = 0; lines[i]; i++) {
+        char   **parts;
+        const char *id_or_name, *ip, *port_str;
+        int         port;
+        char       *jid   = NULL;
+        PurpleBuddy *pb;
+        char       *trimmed;
 
-    for (i = 0; lines[i] != NULL; i++) {
-        char *line = lines[i];
-        char *line_trimmed;
-        char **parts;
-        char *id_or_name; /* old: "nick@ip", new: "nick" */
-        char *ip;
-        char *port_str;
-        int port;
-        char *jid = NULL;
-
-        if (!line || !*line)
+        trimmed = g_strstrip(lines[i]);
+        if (!*trimmed || *trimmed == '#')
             continue;
 
-        line_trimmed = g_strstrip(line);
-        if (*line_trimmed == '\0' || *line_trimmed == '#')
-            continue;
-
-        parts = g_strsplit(line_trimmed, ",", 3);
-        if (!parts[0] || !parts[1]) {
-            g_strfreev(parts);
-            continue;
-        }
+        parts = g_strsplit(trimmed, ",", 3);
+        if (!parts[0] || !parts[1]) { g_strfreev(parts); continue; }
 
         id_or_name = parts[0];
         ip         = parts[1];
         port_str   = parts[2];
+        port       = (port_str && *port_str) ? atoi(port_str) : BONJOUR_DEFAULT_PORT;
 
-        if (port_str && *port_str)
-            port = atoi(port_str);
-        else
-            port = BONJOUR_DEFAULT_PORT;
-
-        /* Backward-compat:
-         *  - old format: "nick@ip,ip,port"
-         *  - new format: "nick,ip,port"
+        /*
+         * Old format: "nick@ip , ip , port"   (parts[0] contains '@')
+         * New format: "nick    , ip , port"   (parts[0] has no '@')
          */
-        if (strchr(id_or_name, '@') != NULL) {
-            /* Legacy: already nick@ip */
+        if (strchr(id_or_name, '@') != NULL)
             jid = g_strdup(id_or_name);
-        } else {
-            /* New: build nick@ip */
+        else
             jid = g_strdup_printf("%s@%s", id_or_name, ip);
-        }
 
-        /* Create bonjour buddy and add to Purple list */
-        BonjourBuddy *bb = bonjour_buddy_new(jid, account);
-        if (!bb) {
-            purple_debug_error("bonjour", "Failed to create buddy for %s\n", jid);
-            g_free(jid);
-            g_strfreev(parts);
-            continue;
-        }
+        pb = purple_find_buddy(account, jid);
+        if (!pb) {
+            const char *at;
+            pb = purple_buddy_new(account, jid, NULL);
+            purple_blist_add_buddy(pb, NULL, group, NULL);
 
-        bb->port_p2pj = port;
-        bb->ips = g_slist_append(NULL, g_strdup(ip));
-
-        bonjour_buddy_add_to_purple(bb, NULL);
-
-        /* Mark as offline initially */
-        PurpleBuddy *pb = purple_find_buddy(account, jid);
-        if (pb) {
-            // Create a proper status with a valid status type
-            PurpleStatusType *stype = purple_account_get_status_type(account,
-                                                                     BONJOUR_STATUS_ID_OFFLINE);
-            if (stype) {
-                purple_prpl_got_user_status(account,
-                                            purple_buddy_get_name(pb),
-                                            BONJOUR_STATUS_ID_OFFLINE,
-                                            NULL);
-                purple_debug_info("bonjour", "Set buddy %s to offline\n", jid);
-            } else {
-                purple_debug_error("bonjour", "No status type for offline for buddy %s\n", jid);
+            /* Set alias to the localpart (nick) */
+            at = strchr(jid, '@');
+            if (at && at != jid) {
+                char *nick = g_strndup(jid, (gsize)(at - jid));
+                purple_blist_alias_buddy(pb, nick);
+                g_free(nick);
             }
-        } else {
-            purple_debug_error("bonjour", "Could not find buddy after creating: %s\n", jid);
         }
+
+        /* Persist IP + port as blist settings (also clears NO_SAVE) */
+        bonjour_buddy_save_to_blist(pb, ip, port);
+
+        purple_debug_info("bonjour", "Migrated contact: %s ip=%s port=%d\n",
+                          jid, ip, port);
 
         g_free(jid);
         g_strfreev(parts);
@@ -437,151 +429,15 @@ static void barev_load_contacts(PurpleAccount *account)
 
     g_strfreev(lines);
     g_free(contents);
-    g_free(filename);
-}
 
-static void barev_save_contact(BonjourBuddy *bb)
-{
-    PurpleAccount *account = bb->account;
-    gchar *filename = barev_contacts_filename(account);
-    GString *out = g_string_new(NULL);
-    char *contents = NULL;
-    gsize len = 0;
-    char **lines = NULL;
-    guint i;
+    /* Remove the old file — migration is done */
+    if (remove(filename) != 0)
+        purple_debug_warning("bonjour",
+            "Could not remove old contacts file %s: %s\n",
+            filename, g_strerror(errno));
+    else
+        purple_debug_info("bonjour", "Migration complete; %s removed\n", filename);
 
-    const char *jid = bb->name ? bb->name : "";  /* e.g. "inky@201:..." */
-    const char *ip  = (bb->ips && bb->ips->data)
-                        ? (const char *)bb->ips->data
-                        : "";
-    int port        = bb->port_p2pj;
-
-    /* Read existing file, rewrite in memory, then overwrite */
-    if (g_file_get_contents(filename, &contents, &len, NULL)) {
-        lines = g_strsplit(contents, "\n", 0);
-
-        for (i = 0; lines[i] != NULL; i++) {
-            char *line = lines[i];
-            char *line_trimmed;
-            char **parts;
-
-            if (!line || !*line)
-                continue; /* skip empty lines entirely */
-
-            line_trimmed = g_strstrip(line);
-            if (*line_trimmed == '\0')
-                continue;
-
-            parts = g_strsplit(line_trimmed, ",", 3);
-            if (!parts[0]) {
-                g_strfreev(parts);
-                continue;
-            }
-
-            char *existing_jid = NULL;
-            if (strchr(parts[0], '@') != NULL) {
-                /* New style: jid,ip,port */
-                existing_jid = g_strdup(parts[0]);
-            } else {
-                /* Old style: nick,ip,port -> reconstruct jid for comparison */
-                const char *existing_ip = (parts[1] && *parts[1]) ? parts[1] : "";
-                existing_jid = g_strdup_printf("%s@%s", parts[0], existing_ip);
-            }
-
-            if (g_strcmp0(existing_jid, jid) == 0) {
-                g_free(existing_jid);
-                g_strfreev(parts);
-                continue; /* we'll write updated record at end */
-            }
-
-            g_free(existing_jid);
-
-            g_string_append(out, line_trimmed);
-            g_string_append_c(out, '\n');
-
-            g_strfreev(parts);
-        }
-
-        g_strfreev(lines);
-        g_free(contents);
-    }
-
-    /* Append our updated record keyed by full buddy name (JID): "jid,ip,port" */
-    g_string_append_printf(out, "%s,%s,%d\n", jid, ip ? ip : "", port);
-
-    /* Write back */
-    g_file_set_contents(filename, out->str, out->len, NULL);
-    g_string_free(out, TRUE);
-    g_free(filename);
-}
-
-static void barev_remove_contact(PurpleAccount *account, const char *name)
-{
-    gchar *filename = barev_contacts_filename(account);
-    char *contents = NULL;
-    gsize len = 0;
-    GString *out;
-    char **lines;
-    guint i;
-
-    if (!g_file_get_contents(filename, &contents, &len, NULL)) {
-        g_free(filename);
-        return;
-    }
-
-    out = g_string_new(NULL);
-    lines = g_strsplit(contents, "\n", 0);
-
-    for (i = 0; lines[i] != NULL; i++) {
-        char *line = lines[i];
-        char *line_trimmed;
-        char **parts;
-
-        if (!line || !*line)
-            continue;
-
-        line_trimmed = g_strstrip(line);
-        if (*line_trimmed == '\0')
-            continue;
-
-        parts = g_strsplit(line_trimmed, ",", 3);
-        if (!parts[0]) {
-            g_strfreev(parts);
-            continue;
-        }
-
-        /* Determine the buddy id on this line and remove only an exact match. */
-        char *existing_id = NULL;
-
-        /* New format: "jid,ip,port" (jid contains '@').
-         * Old format: "nick,ip,port" (no '@') -> rebuild as "nick@ip" for matching.
-         */
-        if (parts[0] && strchr(parts[0], '@') != NULL) {
-            existing_id = g_strdup(parts[0]);
-        } else {
-            const char *existing_ip = (parts[1] && *parts[1]) ? parts[1] : "";
-            existing_id = g_strdup_printf("%s@%s", parts[0] ? parts[0] : "", existing_ip);
-        }
-
-        if (g_strcmp0(existing_id, name) == 0) {
-            /* skip this one (delete) */
-            g_free(existing_id);
-            g_strfreev(parts);
-            continue;
-        }
-
-        g_free(existing_id);
-
-        g_string_append(out, line_trimmed);
-        g_string_append_c(out, '\n');
-        g_strfreev(parts);
-    }
-
-    g_strfreev(lines);
-    g_free(contents);
-
-    g_file_set_contents(filename, out->str, out->len, NULL);
-    g_string_free(out, TRUE);
     g_free(filename);
 }
 
@@ -645,8 +501,8 @@ barev_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group)
     /* Human-friendly alias: just nick */
     purple_blist_alias_buddy(buddy, info->nick);
 
-    /* Persist to barev-contacts-<account>.txt */
-    barev_save_contact(bb);
+    /* Persist contact to blist.xml */
+    bonjour_buddy_save_to_blist(buddy, info->ipv6_address, info->port);
 
     /* Do NOT mark them online here – we only do that when a stream is up */
     purple_prpl_got_user_status(gc->account,
@@ -775,10 +631,13 @@ bonjour_login_barev(PurpleAccount *account)
 
   purple_debug_info("bonjour", "=== BAREV MODE READY ===\n");
 
-  /* 1. Load saved contacts: barev-contacts-<account>.txt */
-  barev_load_contacts(account);
+  /* 1. Migrate flat file → blist.xml (one-time; no-op on subsequent logins) */
+  barev_migrate_flat_file_to_blist(account);
 
-  /* 2. For existing Purple buddies with no protocol_data yet, build bb from name */
+  /* 2. Reconstruct protocol data for every saved contact in blist.xml */
+  bonjour_buddies_load_from_blist(account);
+
+  /* 3. For any remaining buddies with no protocol_data yet, build bb from name */
   GSList *buddies = purple_find_buddies(account, NULL);
   purple_debug_info("bonjour", "Found %d existing buddies\n",
                     g_slist_length(buddies));
@@ -791,7 +650,7 @@ bonjour_login_barev(PurpleAccount *account)
   }
   g_slist_free(buddies);
 
-  /* 3. Start auto-connect timer: keep streams up while reachable */
+  /* 4. Start auto-connect timer: keep streams up while reachable */
   bd->reconnect_timer = purple_timeout_add_seconds(30,
                                                    barev_auto_connect_timer,
                                                    gc);
@@ -954,9 +813,6 @@ static void bonjour_remove_buddy(PurpleConnection *pc, PurpleBuddy *buddy, Purpl
   if (bb) {
     purple_debug_info("bonjour", "Removing buddy: %s\n", purple_buddy_get_name(buddy));
 
-    /* Remove from contacts file */
-    barev_remove_contact(bb->account, bb->name);
-
     /* Clean up the conversation if it exists */
     if (bb->conversation) {
         bonjour_jabber_close_conversation(bb->conversation);
@@ -967,10 +823,9 @@ static void bonjour_remove_buddy(PurpleConnection *pc, PurpleBuddy *buddy, Purpl
     bonjour_buddy_delete(bb);
     purple_buddy_set_protocol_data(buddy, NULL);
   } else {
-    /* Even if no protocol data, try to remove from contacts file */
-    const char *buddy_name = purple_buddy_get_name(buddy);
-    purple_debug_info("bonjour", "Removing buddy without protocol data: %s\n", buddy_name);
-    barev_remove_contact(pc->account, buddy_name);
+    /* Nothing to do — Purple removes the node from blist.xml automatically */
+    purple_debug_info("bonjour", "Removing buddy without protocol data: %s\n",
+                      purple_buddy_get_name(buddy));
   }
 }
 

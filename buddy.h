@@ -107,6 +107,21 @@ void bonjour_buddy_signed_off(PurpleBuddy *purple_buddy);
 void bonjour_buddy_got_buddy_icon(BonjourBuddy *buddy, gconstpointer data, gsize len);
 
 /**
+ * Mark a PurpleBuddy as a persistent ("known") contact: store its IP address
+ * and port as blist-node settings and clear NO_SAVE so Purple serialises the
+ * buddy into blist.xml.
+ */
+void bonjour_buddy_save_to_blist(PurpleBuddy *pb, const char *ip, int port);
+
+/**
+ * Walk every PurpleBuddy that belongs to *account*.  For each one that already
+ * has a "barev_ip" setting (written by save_to_blist) but no protocol_data,
+ * reconstruct the BonjourBuddy from the stored settings and attach it.
+ * Call once at login time, after Purple has already parsed blist.xml.
+ */
+void bonjour_buddies_load_from_blist(PurpleAccount *account);
+
+/**
  * Deletes a buddy from memory.
  */
 void bonjour_buddy_delete(BonjourBuddy *buddy);
