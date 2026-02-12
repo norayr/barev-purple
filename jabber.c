@@ -2952,7 +2952,25 @@ bonjour_jabber_close_conversation(BonjourJabberConversation *bconv)
       }
     }
 
-    /* Close the socket and remove the watcher */
+    /* removng input handlers to prevent any new data from being
+     * processed while we're tearing down the connection.
+     * this must happen before closing the
+     * socket to avoid race conditions with buffered data. */
+    if (bconv->rx_handler != 0) {
+      purple_input_remove(bconv->rx_handler);
+      bconv->rx_handler = 0;
+    }
+    if (bconv->tx_handler > 0) {
+      purple_input_remove(bconv->tx_handler);
+      bconv->tx_handler = 0;
+    }
+
+    /* cleaning up parser context before freeing bconv to prevent any callbacks
+     * from accessing freed memory. This must happen after removing handlers. */
+    if (bconv->context != NULL)
+      bonjour_parser_setup(bconv);
+
+    /* Close the socket */
     if (bconv->socket >= 0) {
       /* Send the end of the stream to the other end of the conversation */
       if (bconv->sent_stream_start == FULLY_SENT) {
@@ -2966,10 +2984,6 @@ bonjour_jabber_close_conversation(BonjourJabberConversation *bconv)
       /* TODO: We're really supposed to wait for "</stream:stream>" before closing the socket */
       close(bconv->socket);
     }
-    if (bconv->rx_handler != 0)
-      purple_input_remove(bconv->rx_handler);
-    if (bconv->tx_handler > 0)
-      purple_input_remove(bconv->tx_handler);
 
     /* Free all the data related to the conversation */
     purple_circ_buffer_destroy(bconv->tx_buf);
@@ -2980,9 +2994,6 @@ bonjour_jabber_close_conversation(BonjourJabberConversation *bconv)
       g_free(ss->msg);
       g_free(ss);
     }
-
-    if (bconv->context != NULL)
-      bonjour_parser_setup(bconv);
 
     if (bconv->close_timeout != 0){
       purple_timeout_remove(bconv->close_timeout);

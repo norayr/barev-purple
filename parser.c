@@ -322,6 +322,17 @@ bonjour_parser_structured_error_handler(void *user_data, const xmlError *error)
 {
   BonjourJabberConversation *bconv = user_data;
 
+  /* defensive check: during conversation teardown, this callback might fire
+   * after bconv has been freed. while the primary fix is ensuring proper
+   * teardown order in jabber.c, this adds extra safety. */
+  if (!bconv) {
+    purple_debug_error("jabber", "XML parser error with NULL conversation context: "
+                                 "Domain %i, code %i, level %i: %s",
+                       error->domain, error->code, error->level,
+                       (error->message ? error->message : "(null)\n"));
+    return;
+  }
+
   purple_debug_error("jabber", "XML parser error for BonjourJabberConversation %p: "
                                "Domain %i, code %i, level %i: %s",
                      bconv,
