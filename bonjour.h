@@ -31,7 +31,7 @@
 
 #define BONJOUR_GROUP_NAME _("Barev")
 #define BONJOUR_PROTOCOL_NAME "barev"
-#define BONJOUR_ICON_NAME "bonjour"
+#define BONJOUR_ICON_NAME "barev"
 
 #define BONJOUR_STATUS_ID_OFFLINE   "offline"
 #define BONJOUR_STATUS_ID_AVAILABLE "available"
