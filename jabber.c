@@ -2505,6 +2505,17 @@ void bonjour_jabber_conv_match_by_ip(BonjourJabberConversation *bconv) {
       return;
     }
 
+   if (bconv->buddy_name &&
+        PURPLE_BLIST_NODE_SHOULD_SAVE((PurpleBlistNode *)pb) &&
+        !purple_strequal(bconv->buddy_name, purple_buddy_get_name(pb))) {
+      purple_debug_warning("barev",
+          "Buddy %s is manually saved but remote claims to be '%s' (IP %s) - "
+          "rejecting IP-only match (name mismatch)\n",
+          purple_buddy_get_name(pb), bconv->buddy_name, bconv->ip);
+      buddies_in = buddies_in->next;
+      continue;
+    }
+
     g_free(bconv->buddy_name);
     bconv->buddy_name = NULL;
 
@@ -2539,6 +2550,13 @@ void bonjour_jabber_conv_match_by_ip(BonjourJabberConversation *bconv) {
     break;
     buddies_in = buddies_in->next;
   }
+
+  if (bconv->pb == NULL) {
+    purple_debug_warning("barev",
+        "All IP-matched buddies for %s were rejected (likely name mismatches) - "
+        "connection remains unassociated\n", bconv->ip);
+  }
+
 
   g_slist_free(mbba->matched_buddies);
   g_free(mbba);
