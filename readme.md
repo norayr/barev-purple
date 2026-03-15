@@ -7,6 +7,9 @@ Before making **Barev**, the [attempt](https://github.com/norayr/ybb) of using *
 
 # Compile
 
+## Gentoo note
+If you're on Gentoo, just add [my overlay](https://github.com/norayr/norayr-overlay) and build from there. No need to manually build.
+
 ## Requirements
 
 You need Pidgin (libpurple) development headers and common build tools.
@@ -29,7 +32,8 @@ then
 ```
 sudo make install
 ```
-or just manually copy libbarev.so to ~/.purple/plugins
+or just manually copy libbarev.so to ~/.purple/plugins. But then you won't have the icons. So better install systemwide.
+
 ```
 cp libbarev.so ~/.purple/plugins
 ```
