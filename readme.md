@@ -52,7 +52,7 @@ Add your buddy (Buddies -> Add Buddy).
 
 Enter the peer's nick@ipv6
 
-The contact will be added to ` ~/.purple/barev-contacts-<nick>.txt`
+The contact will be added to ` ~/.purple/blist.xml`
 
 Currently, if you want to change your contact's port, you need to
 
