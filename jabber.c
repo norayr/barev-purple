@@ -176,7 +176,7 @@ barev_userinfo_add_avatar(PurpleNotifyUserInfo *info, xmlnode *vcard)
     if (type_node)
         type_s = xmlnode_get_data(type_node);
 
-    /* Filename is just “for convenience” in imgstore */
+    /* Filename is just "for convenience" in imgstore */
     if (type_s && g_str_has_prefix(type_s, "image/")) {
         filename = g_strdup_printf("barev-avatar.%s", type_s + 6);
     } else {
@@ -3298,11 +3298,11 @@ gboolean bonjour_jabber_handle_ping(xmlnode *packet, BonjourJabberConversation *
     }
 
     if (ping) {
-      xmlnode *response = xmlnode_new(“iq”);
-      xmlnode_set_attrib(response, “type”, “result”);
-      xmlnode_set_attrib(response, “id”, id ? id : “”);
-      xmlnode_set_attrib(response, “to”, xmlnode_get_attrib(packet, “from”));
-      xmlnode_set_attrib(response, “from”, xmlnode_get_attrib(packet, “to”));
+      xmlnode *response = xmlnode_new("iq");
+      xmlnode_set_attrib(response, "type", "result");
+      xmlnode_set_attrib(response, "id", id ? id : "");
+      xmlnode_set_attrib(response, "to", xmlnode_get_attrib(packet, "from"));
+      xmlnode_set_attrib(response, "from", xmlnode_get_attrib(packet, "to"));
 
       char *xml = xmlnode_to_str(response, NULL);
       xmlnode_free(response);
@@ -3321,8 +3321,8 @@ gboolean bonjour_jabber_handle_ping(xmlnode *packet, BonjourJabberConversation *
       if (!send_ok)
         return TRUE;
 
-      purple_debug_info(“bonjour”, “Responded to ping from %s\n”,
-                       xmlnode_get_attrib(packet, “from”));
+      purple_debug_info("bonjour", "Responded to ping from %s\n",
+                       xmlnode_get_attrib(packet, "from"));
 
       /* Proof of life: if they can ping us, they are online. */
       if (bconv->pb) {
