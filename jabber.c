@@ -1737,11 +1737,12 @@ _client_socket_handler(gpointer data, gint socket, PurpleInputCondition conditio
           "receive of %" G_GSSIZE_FORMAT " error: %s\n",
           len, err ? err : "(null)");
 
+      PurpleBuddy *pb = bconv->pb;
       bonjour_jabber_close_conversation(bconv);
-      if (bconv->pb != NULL) {
-        BonjourBuddy *bb = purple_buddy_get_protocol_data(bconv->pb);
-
-        if(bb != NULL)
+      /* bconv is freed now; use the saved pb pointer */
+      if (pb != NULL) {
+        BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
+        if (bb != NULL)
           bb->conversation = NULL;
       }
 
@@ -3258,12 +3259,16 @@ void bonjour_jabber_send_ping_request(BonjourJabberConversation *bconv) {
   xmlnode *ping = xmlnode_new_child(iq, "ping");
   xmlnode_set_namespace(ping, "urn:xmpp:ping");
 
-  /* Send ping */
   char *xml = xmlnode_to_str(iq, NULL);
-  _send_data(bconv->pb, xml);
-
   xmlnode_free(iq);
+
+  BonjourBuddy *bb_ping = purple_buddy_get_protocol_data(bconv->pb);
+  _send_data(bconv->pb, xml);
   g_free(xml);
+
+  /* _send_data may have freed bconv on a send error; bail out if so */
+  if (bb_ping == NULL || bb_ping->conversation != bconv)
+    return;
 
   purple_debug_info("bonjour", "Sent ping to %s (id: %s)\n",
                    purple_buddy_get_name(bconv->pb), bconv->last_ping_id);
@@ -3293,35 +3298,39 @@ gboolean bonjour_jabber_handle_ping(xmlnode *packet, BonjourJabberConversation *
     }
 
     if (ping) {
-      /* Send ping response */
-      xmlnode *response = xmlnode_new("iq");
-      xmlnode_set_attrib(response, "type", "result");
-      xmlnode_set_attrib(response, "id", id ? id : "");
-      xmlnode_set_attrib(response, "to", xmlnode_get_attrib(packet, "from"));
-      xmlnode_set_attrib(response, "from", xmlnode_get_attrib(packet, "to"));
+      xmlnode *response = xmlnode_new(“iq”);
+      xmlnode_set_attrib(response, “type”, “result”);
+      xmlnode_set_attrib(response, “id”, id ? id : “”);
+      xmlnode_set_attrib(response, “to”, xmlnode_get_attrib(packet, “from”));
+      xmlnode_set_attrib(response, “from”, xmlnode_get_attrib(packet, “to”));
 
       char *xml = xmlnode_to_str(response, NULL);
-      if (bconv->pb) {
-        _send_data(bconv->pb, xml);
-      }
-
       xmlnode_free(response);
+
+      gboolean send_ok = FALSE;
+      if (bconv->pb) {
+        /* Capture bb before _send_data: on a broken socket _send_data calls
+         * bonjour_jabber_close_conversation() which g_free(bconv), making
+         * bconv a dangling pointer.  We detect this via bb->conversation. */
+        BonjourBuddy *bb = purple_buddy_get_protocol_data(bconv->pb);
+        _send_data(bconv->pb, xml);
+        send_ok = (bb != NULL && bb->conversation == bconv);
+      }
       g_free(xml);
 
-      purple_debug_info("bonjour", "Responded to ping from %s\n",
-                       xmlnode_get_attrib(packet, "from"));
+      if (!send_ok)
+        return TRUE;
+
+      purple_debug_info(“bonjour”, “Responded to ping from %s\n”,
+                       xmlnode_get_attrib(packet, “from”));
 
       /* Proof of life: if they can ping us, they are online. */
       if (bconv->pb) {
           PurpleAccount *acct = purple_buddy_get_account(bconv->pb);
           const char *who = purple_buddy_get_name(bconv->pb);
-
           bconv->last_activity = time(NULL);
           bconv->ping_failures = 0;
-
-          /* This fixes your “pending conversation (no stream yet)” gate too */
           bconv->recv_stream_start = TRUE;
-
           purple_prpl_got_user_status(acct, who, BONJOUR_STATUS_ID_AVAILABLE, NULL);
       }
 
