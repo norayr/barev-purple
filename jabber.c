@@ -824,21 +824,22 @@ static gboolean bonjour_jabber_ping_timeout_cb(gpointer data) {
                       purple_buddy_get_name(bconv->pb), bconv->ping_failures);
 
   if (bconv->ping_failures >= MAX_PING_FAILURES) {
+    /* Save pb/bb BEFORE close_conversation(), which g_free(bconv). */
+    PurpleBuddy *pb_save = bconv->pb;
+    BonjourBuddy *bb_save = pb_save ? purple_buddy_get_protocol_data(pb_save) : NULL;
+
     /* Mark buddy as offline */
     purple_prpl_got_user_status(bconv->account,
-                               purple_buddy_get_name(bconv->pb),
+                               purple_buddy_get_name(pb_save),
                                BONJOUR_STATUS_ID_OFFLINE,
                                NULL);
 
-    /* Close conversation */
+    /* Close conversation — bconv is g_free'd inside here; do NOT touch it after. */
     bonjour_jabber_close_conversation(bconv);
 
-    if (bconv->pb) {
-      BonjourBuddy *bb = purple_buddy_get_protocol_data(bconv->pb);
-      if (bb) {
-        bb->conversation = NULL;
-      }
-    }
+    /* Clear the back-pointer on the buddy so nothing tries to reuse the freed bconv. */
+    if (bb_save && bb_save->conversation == bconv)
+      bb_save->conversation = NULL;
 
     return FALSE;
   }
@@ -1501,8 +1502,16 @@ _send_data_write_cb(gpointer data, gint source, PurpleInputCondition cond)
 {
   PurpleBuddy *pb = data;
   BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
-  BonjourJabberConversation *bconv = bb->conversation;
+  BonjourJabberConversation *bconv;
   int ret, writelen;
+
+  if (!bb || !bb->conversation) {
+    purple_debug_warning("bonjour", "_send_data_write_cb: no conversation, removing handler\n");
+    /* Can't safely remove the handler without bconv; just return and let it fire once more. */
+    return;
+  }
+
+  bconv = bb->conversation;
 
   writelen = purple_circ_buffer_get_max_read(bconv->tx_buf);
 
@@ -1544,8 +1553,20 @@ static gint _send_data(PurpleBuddy *pb, char *message)
 {
   gint ret;
   int len = strlen(message);
-  BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
-  BonjourJabberConversation *bconv = bb->conversation;
+  BonjourBuddy *bb;
+  BonjourJabberConversation *bconv;
+
+  if (!pb || !message)
+    return -1;
+
+  bb = purple_buddy_get_protocol_data(pb);
+  if (!bb || !bb->conversation) {
+    purple_debug_warning("bonjour", "_send_data: no conversation for buddy %s\n",
+                         pb ? purple_buddy_get_name(pb) : "(null)");
+    return -1;
+  }
+
+  bconv = bb->conversation;
 
   /* If we're not ready to actually send, append it to the buffer */
   if (bconv->tx_handler != 0
