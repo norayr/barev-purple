@@ -224,6 +224,9 @@ bonjour_parser_element_start_libxml(void *user_data,
   xmlnode *node;
   int i;
 
+  if (!bconv || bconv->closing || bconv->close_timeout != 0)
+    return;
+
   g_return_if_fail(element_name != NULL);
 
   if(!xmlStrcmp(element_name, (xmlChar*) "stream")) {
@@ -233,7 +236,8 @@ bonjour_parser_element_start_libxml(void *user_data,
       /* Always parse and validate the "from" attribute, even if we already have a buddy */
       parse_from_attrib_and_find_buddy(bconv, nb_attributes, attributes);
 
-      bonjour_jabber_stream_started(bconv);
+      if (!bconv->closing && bconv->close_timeout == 0)
+        bonjour_jabber_stream_started(bconv);
     }
   } else {
 
@@ -247,6 +251,11 @@ bonjour_parser_element_start_libxml(void *user_data,
          using explicitly specified stuff; see if we can make a good match
          by using the IP */
       bonjour_jabber_conv_match_by_ip(bconv);
+
+    /* Matching can reject this stream and queue destruction.  Do not build a
+     * stanza on a conversation which is already logically dead. */
+    if (bconv->closing || bconv->close_timeout != 0)
+      return;
 
     if(bconv->current)
       node = xmlnode_new_child(bconv->current, (const char*) element_name);
@@ -282,6 +291,9 @@ bonjour_parser_element_end_libxml(void *user_data, const xmlChar *element_name,
 {
   BonjourJabberConversation *bconv = user_data;
 
+  if (!bconv || bconv->closing || bconv->close_timeout != 0)
+    return;
+
   if(!bconv->current) {
     /* We don't keep a reference to the start stream xmlnode,
      * so we have to check for it here to close the conversation */
@@ -308,7 +320,8 @@ bonjour_parser_element_text_libxml(void *user_data, const xmlChar *text, int tex
 {
   BonjourJabberConversation *bconv = user_data;
 
-  if(!bconv->current)
+  if (!bconv || bconv->closing || bconv->close_timeout != 0 ||
+      !bconv->current)
     return;
 
   if(!text || !text_len)
@@ -390,9 +403,39 @@ bonjour_parser_setup(BonjourJabberConversation *bconv)
   }
 }
 
+/* Tear a parser down without feeding it an artificial end-of-file.
+ * A Barev/XMPP stream deliberately keeps <stream:stream> open, so finalising
+ * an interrupted parser produces a spurious "Premature end of data" error and
+ * can run SAX callbacks while the conversation is being destroyed. */
+void
+bonjour_parser_destroy(BonjourJabberConversation *bconv)
+{
+  xmlnode *root;
+
+  if (!bconv)
+    return;
+
+  if (bconv->context) {
+    xmlFreeParserCtxt(bconv->context);
+    bconv->context = NULL;
+  }
+
+  root = bconv->current;
+  while (root && root->parent)
+    root = root->parent;
+
+  if (root)
+    xmlnode_free(root);
+
+  bconv->current = NULL;
+}
+
 
 void bonjour_parser_process(BonjourJabberConversation *bconv, const char *buf, int len)
 {
+
+  if (!bconv || bconv->closing || bconv->close_timeout != 0)
+    return;
 
   if (bconv->context == NULL) {
     /* libxml inconsistently starts parsing on creating the

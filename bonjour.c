@@ -254,6 +254,7 @@ barev_auto_connect_timer(gpointer data)
   PurpleConnection *gc = data;
   BonjourData *bd;
   GSList *buddies;
+  GHashTable *seen_buddies;
 
   if (!gc)
     return FALSE;
@@ -266,11 +267,33 @@ barev_auto_connect_timer(gpointer data)
   purple_debug_info("bonjour", "Barev: auto-connecting to buddies\n");
 
   buddies = purple_find_buddies(gc->account, NULL);
+  seen_buddies = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
   for (GSList *l = buddies; l; l = l->next) {
     PurpleBuddy *pb = l->data;
-    BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
+    PurpleBuddy *canonical;
+    BonjourBuddy *bb;
     const char *who = purple_buddy_get_name(pb);
 
+    /* Pidgin can contain the same buddy in more than one group/contact node.
+     * Opening one socket per duplicate produces several simultaneous connect
+     * callbacks for the same JID.  Use the same canonical PurpleBuddy that
+     * purple_find_buddy() will later return to the connection callbacks. */
+    if (!who) {
+      purple_debug_warning("bonjour",
+                           "Barev: skipping buddy entry with no name\n");
+      continue;
+    }
+
+    canonical = purple_find_buddy(gc->account, who);
+    if ((canonical && canonical != pb) ||
+        g_hash_table_lookup(seen_buddies, who) != NULL) {
+      purple_debug_warning("bonjour",
+                           "Barev: skipping duplicate buddy entry %s\n", who);
+      continue;
+    }
+    g_hash_table_insert(seen_buddies, g_strdup(who), GINT_TO_POINTER(1));
+
+    bb = purple_buddy_get_protocol_data(pb);
     if (!bb) {
       purple_debug_info("bonjour", "Barev: buddy %s has no protocol data\n",
                         who ? who : "(null)");
@@ -309,13 +332,7 @@ barev_auto_connect_timer(gpointer data)
                         "Barev: buddy %s has DEAD connection, cleaning\n",
                         who ? who : "(null)");
 
-      if (bconv->socket >= 0) {
-        close(bconv->socket);
-        bconv->socket = -1;
-      }
-
       bonjour_jabber_close_conversation(bconv);
-      bb->conversation = NULL;
     }
 
     purple_debug_info("bonjour", "Barev: attempting connection to %s at %s\n",
@@ -326,6 +343,7 @@ barev_auto_connect_timer(gpointer data)
   }
 
   g_slist_free(buddies);
+  g_hash_table_destroy(seen_buddies);
   return TRUE;
 }
 

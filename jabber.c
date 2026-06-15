@@ -755,6 +755,40 @@ validate_ip_consistency(BonjourJabberConversation *bconv, const char *from_jid)
     return valid;
 }
 
+/* Resolve the normal TCP collision where both peers auto-connect at the same
+ * time.  Both ends must choose the same physical connection.  The peer with
+ * the lexicographically smaller JID keeps its outgoing connection; the larger
+ * peer keeps the corresponding incoming connection. */
+static gboolean
+bonjour_candidate_wins_collision(PurpleBuddy *pb,
+                                  BonjourJabberConversation *existing,
+                                  BonjourJabberConversation *candidate)
+{
+    const char *local_jid;
+    const char *remote_jid;
+    gboolean prefer_outgoing;
+
+    if (!existing || existing == candidate)
+        return TRUE;
+
+    if (existing->closing || existing->close_timeout != 0 || existing->socket < 0)
+        return TRUE;
+
+    /* Two connections in the same direction are duplicates.  Keep the first
+     * one instead of allowing a late callback to replace a working stream. */
+    if (existing->incoming == candidate->incoming)
+        return FALSE;
+
+    local_jid = bonjour_get_jid(candidate->account);
+    remote_jid = pb ? purple_buddy_get_name(pb) : NULL;
+
+    if (!local_jid || !remote_jid)
+        return FALSE;
+
+    prefer_outgoing = (g_ascii_strcasecmp(local_jid, remote_jid) < 0);
+    return candidate->incoming ? !prefer_outgoing : prefer_outgoing;
+}
+
 /* Helper to format the IPv6 */
 /* Update format_host_for_proxy in jabber.c */
 
@@ -808,7 +842,7 @@ static gchar* generate_ping_id(void) {
 static gboolean bonjour_jabber_ping_timeout_cb(gpointer data) {
   BonjourJabberConversation *bconv = data;
 
-  if (!bconv) {
+  if (!bconv || bconv->closing || bconv->close_timeout != 0) {
     return FALSE;
   }
 
@@ -824,23 +858,9 @@ static gboolean bonjour_jabber_ping_timeout_cb(gpointer data) {
                       purple_buddy_get_name(bconv->pb), bconv->ping_failures);
 
   if (bconv->ping_failures >= MAX_PING_FAILURES) {
-    /* Save pb/bb BEFORE close_conversation(), which g_free(bconv). */
-    PurpleBuddy *pb_save = bconv->pb;
-    BonjourBuddy *bb_save = pb_save ? purple_buddy_get_protocol_data(pb_save) : NULL;
-
-    /* Mark buddy as offline */
-    purple_prpl_got_user_status(bconv->account,
-                               purple_buddy_get_name(pb_save),
-                               BONJOUR_STATUS_ID_OFFLINE,
-                               NULL);
-
-    /* Close conversation — bconv is g_free'd inside here; do NOT touch it after. */
+    /* This function also clears the buddy back-pointer and marks the current
+     * stream offline.  Do not touch bconv after it returns. */
     bonjour_jabber_close_conversation(bconv);
-
-    /* Clear the back-pointer on the buddy so nothing tries to reuse the freed bconv. */
-    if (bb_save && bb_save->conversation == bconv)
-      bb_save->conversation = NULL;
-
     return FALSE;
   }
 
@@ -853,7 +873,8 @@ static gboolean bonjour_jabber_ping_timeout_cb(gpointer data) {
 static gboolean bonjour_jabber_ping_timer_cb(gpointer data) {
   BonjourJabberConversation *bconv = data;
 
-  if (!bconv || bconv->socket < 0 || !bconv->pb) {
+  if (!bconv || bconv->closing || bconv->close_timeout != 0 ||
+      bconv->socket < 0 || !bconv->pb) {
     return FALSE;
   }
 
@@ -873,7 +894,7 @@ static gboolean bonjour_jabber_ping_timer_cb(gpointer data) {
 
 /* Start ping mechanism */
 void bonjour_jabber_start_ping(BonjourJabberConversation *bconv) {
-  if (!bconv) return;
+  if (!bconv || bconv->closing || bconv->close_timeout != 0) return;
 
   /* Stop any existing ping timers */
   bonjour_jabber_stop_ping(bconv);
@@ -915,7 +936,8 @@ void bonjour_jabber_stop_ping(BonjourJabberConversation *bconv) {
 
 /* Handle ping response */
 static void bonjour_jabber_handle_ping_response(xmlnode *packet, BonjourJabberConversation *bconv) {
-  if (!packet || !bconv || !bconv->last_ping_id) return;
+  if (!packet || !bconv || bconv->closing || bconv->close_timeout != 0 ||
+      !bconv->last_ping_id) return;
 
   const char *type = xmlnode_get_attrib(packet, "type");
   const char *id = xmlnode_get_attrib(packet, "id");
@@ -1500,18 +1522,27 @@ _match_buddies_by_address(gpointer value, gpointer data)
 static void
 _send_data_write_cb(gpointer data, gint source, PurpleInputCondition cond)
 {
-  PurpleBuddy *pb = data;
-  BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
-  BonjourJabberConversation *bconv;
+  BonjourJabberConversation *bconv = data;
+  PurpleBuddy *pb;
+  BonjourBuddy *bb;
   int ret, writelen;
 
-  if (!bb || !bb->conversation) {
-    purple_debug_warning("bonjour", "_send_data_write_cb: no conversation, removing handler\n");
-    /* Can't safely remove the handler without bconv; just return and let it fire once more. */
+  if (!bconv || bconv->closing || bconv->close_timeout != 0)
+    return;
+
+  pb = bconv->pb;
+  bb = pb ? purple_buddy_get_protocol_data(pb) : NULL;
+
+  if (!pb || !bb || bb->conversation != bconv || source != bconv->socket) {
+    purple_debug_warning("bonjour",
+                         "_send_data_write_cb: stale conversation callback; removing handler\n");
+    if (bconv->tx_handler != 0) {
+      guint handler = bconv->tx_handler;
+      bconv->tx_handler = 0;
+      purple_input_remove(handler);
+    }
     return;
   }
-
-  bconv = bb->conversation;
 
   writelen = purple_circ_buffer_get_max_read(bconv->tx_buf);
 
@@ -1541,8 +1572,7 @@ _send_data_write_cb(gpointer data, gint source, PurpleInputCondition cond)
           _("Unable to send message."),
           PURPLE_MESSAGE_SYSTEM, time(NULL));
 
-    bonjour_jabber_close_conversation(bb->conversation);
-    bb->conversation = NULL;
+    bonjour_jabber_close_conversation(bconv);
     return;
   }
 
@@ -1567,6 +1597,9 @@ static gint _send_data(PurpleBuddy *pb, char *message)
   }
 
   bconv = bb->conversation;
+
+  if (bconv->closing || bconv->close_timeout != 0)
+    return -1;
 
   /* If we're not ready to actually send, append it to the buffer */
   if (bconv->tx_handler != 0
@@ -1598,8 +1631,7 @@ static gint _send_data(PurpleBuddy *pb, char *message)
           _("Unable to send message."),
           PURPLE_MESSAGE_SYSTEM, time(NULL));
 
-    bonjour_jabber_close_conversation(bb->conversation);
-    bb->conversation = NULL;
+    bonjour_jabber_close_conversation(bconv);
     return -1;
   }
 
@@ -1607,7 +1639,7 @@ static gint _send_data(PurpleBuddy *pb, char *message)
     /* Don't interfere with the stream starting */
     if (bconv->sent_stream_start == FULLY_SENT && bconv->recv_stream_start && bconv->tx_handler == 0)
       bconv->tx_handler = purple_input_add(bconv->socket, PURPLE_INPUT_WRITE,
-        _send_data_write_cb, pb);
+        _send_data_write_cb, bconv);
     purple_circ_buffer_append(bconv->tx_buf, message + ret, len - ret);
   }
 
@@ -1726,19 +1758,13 @@ bonjour_jabber_send_presence(PurpleBuddy *pb,
 void
 bonjour_jabber_stream_ended(BonjourJabberConversation *bconv)
 {
-  BonjourBuddy *bb = NULL;
-
   purple_debug_info("bonjour", "Received conversation close notification from %s\n",
     bconv->pb ? purple_buddy_get_name(bconv->pb) :
     (bconv->buddy_name ? bconv->buddy_name : "(unknown)"));
 
-  if(bconv->pb != NULL)
-    bb = purple_buddy_get_protocol_data(bconv->pb);
-
-  /* Close the socket, clear the watcher and free memory */
+  /* The destructor clears the back-pointer only when this is still the
+   * buddy's current conversation.  A stale EOF must not erase a newer one. */
   bonjour_jabber_close_conversation(bconv);
-  if(bb)
-    bb->conversation = NULL;
 }
 
 static void
@@ -1747,6 +1773,16 @@ _client_socket_handler(gpointer data, gint socket, PurpleInputCondition conditio
   BonjourJabberConversation *bconv = data;
   gssize len;
   static char message[4096];
+
+  if (!bconv || bconv->closing || bconv->close_timeout != 0)
+    return;
+
+  if (socket != bconv->socket) {
+    purple_debug_warning("bonjour",
+                         "Ignoring stale read callback for socket %d (current %d)\n",
+                         socket, bconv->socket);
+    return;
+  }
 
   /* Read the data from the socket */
   if ((len = recv(socket, message, sizeof(message) - 1, 0)) < 0) {
@@ -1758,14 +1794,7 @@ _client_socket_handler(gpointer data, gint socket, PurpleInputCondition conditio
           "receive of %" G_GSSIZE_FORMAT " error: %s\n",
           len, err ? err : "(null)");
 
-      PurpleBuddy *pb = bconv->pb;
       bonjour_jabber_close_conversation(bconv);
-      /* bconv is freed now; use the saved pb pointer */
-      if (pb != NULL) {
-        BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
-        if (bb != NULL)
-          bb->conversation = NULL;
-      }
 
       /* I guess we really don't need to notify the user.
        * If they try to send another message it'll reconnect */
@@ -1807,8 +1836,18 @@ static void
 _start_stream(gpointer data, gint source, PurpleInputCondition condition)
 {
   BonjourJabberConversation *bconv = data;
-  struct _stream_start_data *ss = bconv->stream_data;
+  struct _stream_start_data *ss;
   int len, ret;
+
+  if (!bconv || bconv->closing || bconv->close_timeout != 0)
+    return;
+
+  if (source != bconv->socket || bconv->stream_data == NULL) {
+    purple_debug_warning("bonjour", "Ignoring stale stream-start callback\n");
+    return;
+  }
+
+  ss = bconv->stream_data;
 
   len = strlen(ss->msg);
 
@@ -1821,12 +1860,9 @@ _start_stream(gpointer data, gint source, PurpleInputCondition condition)
     const char *err = g_strerror(errno);
     PurpleConversation *conv;
     const char *bname = bconv->buddy_name;
-    BonjourBuddy *bb = NULL;
 
-    if(bconv->pb) {
-      bb = purple_buddy_get_protocol_data(bconv->pb);
+    if(bconv->pb)
       bname = purple_buddy_get_name(bconv->pb);
-    }
 
     purple_debug_error("bonjour", "Error starting stream with buddy %s at %s error: %s\n",
            bname ? bname : "(unknown)", bconv->ip, err ? err : "(null)");
@@ -1838,9 +1874,6 @@ _start_stream(gpointer data, gint source, PurpleInputCondition condition)
           PURPLE_MESSAGE_SYSTEM, time(NULL));
 
     bonjour_jabber_close_conversation(bconv);
-    if(bb != NULL)
-      bb->conversation = NULL;
-
     return;
   }
 
@@ -1903,7 +1936,6 @@ static gboolean bonjour_jabber_send_stream_init(BonjourJabberConversation *bconv
             PURPLE_MESSAGE_SYSTEM, time(NULL));
     }
 
-    close(client_socket);
     g_free(stream_start);
 
     return FALSE;
@@ -1929,6 +1961,9 @@ static gboolean bonjour_jabber_send_stream_init(BonjourJabberConversation *bconv
  * AND when we've received a <stream:stream /> */
 void bonjour_jabber_stream_started(BonjourJabberConversation *bconv) {
 
+  if (!bconv || bconv->closing || bconv->close_timeout != 0)
+    return;
+
   if (bconv->sent_stream_start == NOT_SENT &&
       !bonjour_jabber_send_stream_init(bconv, bconv->socket)) {
     const char *err = g_strerror(errno);
@@ -1943,13 +1978,6 @@ void bonjour_jabber_stream_started(BonjourJabberConversation *bconv) {
                        err ? err : "(null)");
 
     if (bconv->pb) {
-      if (!validate_ip_consistency(bconv, purple_buddy_get_name(bconv->pb))) {
-      purple_debug_error("bonjour",
-        "Closing connection due to IP mismatch for %s\n",
-        purple_buddy_get_name(bconv->pb));
-      async_bonjour_jabber_close_conversation(bconv);
-      return;
-      }
       PurpleConversation *conv;
       conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_IM,
                                                    bname, bconv->account);
@@ -1960,8 +1988,16 @@ void bonjour_jabber_stream_started(BonjourJabberConversation *bconv) {
     }
 
     /* We don't want to recieve anything else */
-    close(bconv->socket);
-    bconv->socket = -1;
+    if (bconv->rx_handler != 0) {
+      guint handler = bconv->rx_handler;
+      bconv->rx_handler = 0;
+      purple_input_remove(handler);
+    }
+
+    if (bconv->socket >= 0) {
+      close(bconv->socket);
+      bconv->socket = -1;
+    }
 
     /* This must be asynchronous because it destroys the parser and we
      * may be in the middle of parsing.
@@ -1990,9 +2026,9 @@ void bonjour_jabber_stream_started(BonjourJabberConversation *bconv) {
       /* Watch for when we can write the buffered messages */
       bconv->tx_handler = purple_input_add(bconv->socket,
                                            PURPLE_INPUT_WRITE,
-                                           _send_data_write_cb, bconv->pb);
+                                           _send_data_write_cb, bconv);
       /* We can probably write the data right now. */
-      _send_data_write_cb(bconv->pb, bconv->socket, PURPLE_INPUT_WRITE);
+      _send_data_write_cb(bconv, bconv->socket, PURPLE_INPUT_WRITE);
     }
 
     barev_send_current_presence_to_buddy(pb);
@@ -2077,8 +2113,12 @@ _server_socket_handler(gpointer data, int server_socket, PurpleInputCondition co
 
   /* Create conversation for this connection */
   BonjourJabberConversation *bconv = bonjour_jabber_conv_new(NULL, jdata->account, address_text);
+  bconv->incoming = TRUE;
   bconv->socket = client_socket;
   bconv->rx_handler = purple_input_add(client_socket, PURPLE_INPUT_READ, _client_socket_handler, bconv);
+  purple_debug_info("bonjour",
+                    "Accepted incoming conversation %p fd=%d from %s\n",
+                    bconv, client_socket, address_text);
 
   /* Add to pending conversations list */
   jdata->pending_conversations = g_slist_prepend(jdata->pending_conversations, bconv);
@@ -2207,33 +2247,55 @@ bonjour_jabber_start(BonjourJabber *jdata)
 static void
 _connected_to_buddy(gpointer data, gint source, const gchar *error)
 {
-  PurpleBuddy *pb = data;
-  BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
+  BonjourJabberConversation *bconv = data;
+  PurpleBuddy *pb;
+  BonjourBuddy *bb;
 
-  /* Debug log */
-  purple_debug_info("bonjour", "_connected_to_buddy for %s, source=%d, error=%s\n",
-                   purple_buddy_get_name(pb), source, error ? error : "(null)");
-
-  if (!bb || !bb->conversation) {
-    purple_debug_warning("bonjour", "No conversation for %s\n", purple_buddy_get_name(pb));
-    if (source >= 0) close(source);
+  if (!bconv) {
+    if (source >= 0)
+      close(source);
     return;
   }
 
-  bb->conversation->connect_data = NULL;
+  /* Reaching this callback means libpurple has completed and released this
+   * proxy-connect operation.  Never try to cancel the old handle later. */
+  bconv->connect_data = NULL;
+
+  if (bconv->closing || bconv->close_timeout != 0) {
+    if (source >= 0)
+      close(source);
+    return;
+  }
+
+  pb = bconv->pb;
+  bb = pb ? purple_buddy_get_protocol_data(pb) : NULL;
+
+  /* Debug log */
+  purple_debug_info("bonjour", "_connected_to_buddy for %s, source=%d, error=%s\n",
+                   pb ? purple_buddy_get_name(pb) : "(unknown)",
+                   source, error ? error : "(null)");
+
+  if (!pb || !bb || bb->conversation != bconv) {
+    purple_debug_warning("bonjour", "Stale proxy-connect callback\n");
+    if (source >= 0) close(source);
+    bonjour_jabber_close_conversation(bconv);
+    return;
+  }
+
   if (source < 0) {
     PurpleConversation *conv = NULL;
     PurpleAccount *account = NULL;
     GSList *tmp = bb->ips;
 
     purple_debug_error("bonjour", "Error connecting to buddy %s at %s:%d (%s); Trying next IP address\n",
-           purple_buddy_get_name(pb), bb->conversation->ip, bb->port_p2pj, error);
+           purple_buddy_get_name(pb), bconv->ip, bb->port_p2pj,
+           error ? error : "unknown error");
 
     /* There may be multiple entries for the same IP - one per
      * presence recieved (e.g. multiple interfaces).
      * We need to make sure that we find the previously used entry.
      */
-    while (tmp && bb->conversation->ip_link != tmp->data)
+    while (tmp && bconv->ip_link != tmp->data)
       tmp = g_slist_next(tmp);
     if (tmp)
       tmp = g_slist_next(tmp);
@@ -2245,7 +2307,7 @@ _connected_to_buddy(gpointer data, gint source, const gchar *error)
       PurpleProxyConnectData *connect_data;
       gchar *host_for_connect;
 
-      bb->conversation->ip_link = ip = tmp->data;
+      bconv->ip_link = ip = tmp->data;
 
       /* Format IP correctly for IPv6 */
       host_for_connect = format_host_for_proxy(ip);
@@ -2255,14 +2317,15 @@ _connected_to_buddy(gpointer data, gint source, const gchar *error)
             host_for_connect, bb->port_p2pj);
 
       connect_data = purple_proxy_connect(purple_account_get_connection(account),
-                  account, host_for_connect, bb->port_p2pj, _connected_to_buddy, pb);
+                  account, host_for_connect, bb->port_p2pj,
+                  _connected_to_buddy, bconv);
 
       g_free(host_for_connect);
 
       if (connect_data != NULL) {
-        g_free(bb->conversation->ip);
-        bb->conversation->ip = g_strdup(ip);
-        bb->conversation->connect_data = connect_data;
+        g_free(bconv->ip);
+        bconv->ip = g_strdup(ip);
+        bconv->connect_data = connect_data;
 
         return;
       }
@@ -2276,10 +2339,11 @@ _connected_to_buddy(gpointer data, gint source, const gchar *error)
           _("Unable to send the message, the conversation couldn't be started."),
           PURPLE_MESSAGE_SYSTEM, time(NULL));
 
-    bonjour_jabber_close_conversation(bb->conversation);
-    bb->conversation = NULL;
+    bonjour_jabber_close_conversation(bconv);
     return;
   }
+
+  bconv->socket = source;
 
   /* Detect the actual source IP for incoming connection */
   struct sockaddr_storage local_addr;
@@ -2293,19 +2357,19 @@ _connected_to_buddy(gpointer data, gint source, const gchar *error)
           char *percent = strchr(local_ip, '%');
           if (percent) *percent = '\0';
 
-          g_free(bb->conversation->local_ip);
-          bb->conversation->local_ip = g_strdup(local_ip);
+          g_free(bconv->local_ip);
+          bconv->local_ip = g_strdup(local_ip);
           purple_debug_info("bonjour", "Detected source IP for incoming connection: %s\n", local_ip);
       }
   }
 
-  if (!bonjour_jabber_send_stream_init(bb->conversation, source)) {
+  if (!bonjour_jabber_send_stream_init(bconv, source)) {
     const char *err = g_strerror(errno);
     PurpleConversation *conv = NULL;
     PurpleAccount *account = NULL;
 
     purple_debug_error("bonjour", "Error starting stream with buddy %s at %s:%d error: %s\n",
-           purple_buddy_get_name(pb), bb->conversation->ip, bb->port_p2pj, err ? err : "(null)");
+           purple_buddy_get_name(pb), bconv->ip, bb->port_p2pj, err ? err : "(null)");
 
     account = purple_buddy_get_account(pb);
 
@@ -2315,16 +2379,13 @@ _connected_to_buddy(gpointer data, gint source, const gchar *error)
           _("Unable to send the message, the conversation couldn't be started."),
           PURPLE_MESSAGE_SYSTEM, time(NULL));
 
-    close(source);
-    bonjour_jabber_close_conversation(bb->conversation);
-    bb->conversation = NULL;
+    bonjour_jabber_close_conversation(bconv);
     return;
   }
 
   /* Start listening for the stream acknowledgement */
-  bb->conversation->socket = source;
-  bb->conversation->rx_handler = purple_input_add(source,
-    PURPLE_INPUT_READ, _client_socket_handler, bb->conversation);
+  bconv->rx_handler = purple_input_add(source,
+    PURPLE_INPUT_READ, _client_socket_handler, bconv);
 }
 
 void
@@ -2378,6 +2439,8 @@ bonjour_jabber_conv_match_by_name(BonjourJabberConversation *bconv)
 
             /* 3) IP match */
             bonjour_jabber_conv_match_by_ip(bconv);
+            if (bconv->closing || bconv->close_timeout != 0)
+                return;
             pb = bconv->pb;
         }
     }
@@ -2403,6 +2466,8 @@ bonjour_jabber_conv_match_by_name(BonjourJabberConversation *bconv)
 
         /* Fall back to IP match */
         bonjour_jabber_conv_match_by_ip(bconv);
+        if (bconv->closing || bconv->close_timeout != 0)
+            return;
         pb = bconv->pb;
 
         if (!pb) {
@@ -2431,27 +2496,43 @@ bonjour_jabber_conv_match_by_name(BonjourJabberConversation *bconv)
                       bconv->buddy_name ? bconv->buddy_name : "(null)",
                       bconv->ip ? bconv->ip : "(null)");
 
+    bconv->pb = pb;
+
+    /* Validate the candidate before disturbing an already working stream. */
+    if (!validate_ip_consistency(bconv, purple_buddy_get_name(pb))) {
+      purple_debug_error("bonjour",
+        "Closing connection due to IP mismatch for %s\n",
+        purple_buddy_get_name(pb));
+      async_bonjour_jabber_close_conversation(bconv);
+      return;
+    }
+
+    if (bb->conversation != NULL && bb->conversation != bconv) {
+      BonjourJabberConversation *existing = bb->conversation;
+
+      if (!bonjour_candidate_wins_collision(pb, existing, bconv)) {
+        purple_debug_info("bonjour",
+            "Keeping existing %s connection for %s; rejecting duplicate %s connection\n",
+            existing->incoming ? "incoming" : "outgoing",
+            purple_buddy_get_name(pb),
+            bconv->incoming ? "incoming" : "outgoing");
+        async_bonjour_jabber_close_conversation(bconv);
+        return;
+      }
+
+      purple_debug_info("bonjour",
+          "Replacing existing %s connection for %s with deterministic %s winner\n",
+          existing->incoming ? "incoming" : "outgoing",
+          purple_buddy_get_name(pb),
+          bconv->incoming ? "incoming" : "outgoing");
+      bonjour_jabber_close_conversation(existing);
+    }
+
     /* Attach conv. to buddy and remove from pending list */
     jdata->pending_conversations =
         g_slist_remove(jdata->pending_conversations, bconv);
-
-    /* If the buddy already has a conversation, replace it */
-    if (bb->conversation != NULL && bb->conversation != bconv)
-        bonjour_jabber_close_conversation(bb->conversation);
-
-    bconv->pb = pb;
     bb->conversation = bconv;
 
-    if (bconv->pb != NULL) {
-    /* Validate IP consistency */
-    if (!validate_ip_consistency(bconv, purple_buddy_get_name(bconv->pb))) {
-      purple_debug_error("bonjour",
-        "Closing connection due to IP mismatch for %s\n",
-        purple_buddy_get_name(bconv->pb));
-      async_bonjour_jabber_close_conversation(bconv);
-      return;
-      }
-    }
     purple_debug_info("bonjour", "Setting bb->conversation for %s to %p\n",
                   purple_buddy_get_name(pb), bconv);
 
@@ -2472,6 +2553,10 @@ void bonjour_jabber_conv_match_by_ip(BonjourJabberConversation *bconv) {
   BonjourJabber *jdata = ((BonjourData*) bconv->account->gc->proto_data)->jabber_data;
   struct _match_buddies_by_address_t *mbba;
   GSList *buddies;
+
+  /* This routine is a fallback matcher.  Do not leave a previous tentative
+   * association in place if every IP candidate is rejected. */
+  bconv->pb = NULL;
 
   /* Normalize IPv6 address if needed */
   if (bconv->ip && strchr(bconv->ip, ':')) {
@@ -2541,36 +2626,47 @@ void bonjour_jabber_conv_match_by_ip(BonjourJabberConversation *bconv) {
     g_free(bconv->buddy_name);
     bconv->buddy_name = NULL;
 
-    /* Inform the user that the conversation has been opened */
-    /* TODO: Check if it's correct to call bconv->pb->account or bconv->account */
     bconv->pb = pb;
+
+    if (!validate_ip_consistency(bconv, purple_buddy_get_name(pb))) {
+      purple_debug_error("bonjour",
+        "Closing connection due to IP mismatch for %s\n",
+        purple_buddy_get_name(pb));
+      async_bonjour_jabber_close_conversation(bconv);
+      g_slist_free(mbba->matched_buddies);
+      g_free(mbba);
+      return;
+    }
+
+    if (bb->conversation != NULL && bb->conversation != bconv) {
+      BonjourJabberConversation *existing = bb->conversation;
+
+      if (!bonjour_candidate_wins_collision(pb, existing, bconv)) {
+        purple_debug_info("bonjour",
+            "Keeping existing %s connection for %s; rejecting duplicate %s connection\n",
+            existing->incoming ? "incoming" : "outgoing",
+            purple_buddy_get_name(pb),
+            bconv->incoming ? "incoming" : "outgoing");
+        async_bonjour_jabber_close_conversation(bconv);
+        g_slist_free(mbba->matched_buddies);
+        g_free(mbba);
+        return;
+      }
+
+      purple_debug_info("bonjour",
+          "Replacing existing %s connection for %s with deterministic %s winner\n",
+          existing->incoming ? "incoming" : "outgoing",
+          purple_buddy_get_name(pb),
+          bconv->incoming ? "incoming" : "outgoing");
+      bonjour_jabber_close_conversation(existing);
+    }
+
     bb->conversation = bconv;
     purple_debug_info("bonjour", "Setting bb->conversation for %s to %p\n",
                   purple_buddy_get_name(pb), bconv);
 
-    if (bconv->pb != NULL) {
-    /* Validate IP consistency */
-    if (!validate_ip_consistency(bconv, purple_buddy_get_name(bconv->pb))) {
-      purple_debug_error("bonjour",
-        "Closing connection due to IP mismatch for %s\n",
-        purple_buddy_get_name(bconv->pb));
-      async_bonjour_jabber_close_conversation(bconv);
-      return;
-      }
-    }
-    /* We've matched a buddy.  First, make sure we aren't already talking to this person elsewhere */
-    //if(bb->conversation != NULL && bb->conversation != bconv) {
-    //  purple_debug_info("bonjour", "Matched buddy %s is already in a conversation.\n", purple_buddy_get_name(pb));
-    //  /* We can't delete the bconv here, but we can unassociate ourselves from it */
-    //  bconv->pb = NULL;
-    //  bb->conversation = bconv;
-    //  purple_debug_info("bonjour", "Setting bb->conversation for %s to %p\n",
-    //              purple_buddy_get_name(pb), bconv);
-    //}
-
     /* Break because we only want to match one buddy */
     break;
-    buddies_in = buddies_in->next;
   }
 
   if (bconv->pb == NULL) {
@@ -2583,8 +2679,9 @@ void bonjour_jabber_conv_match_by_ip(BonjourJabberConversation *bconv) {
   g_slist_free(mbba->matched_buddies);
   g_free(mbba);
 
-  /* Remove from pending conversations if it was there */
-  if (jdata->pending_conversations) {
+  /* Only an associated conversation leaves the pending set.  Otherwise keep
+   * it there so shutdown/EOF cleanup still owns it. */
+  if (bconv->pb != NULL && jdata->pending_conversations) {
     jdata->pending_conversations = g_slist_remove(jdata->pending_conversations, bconv);
   }
 
@@ -2595,9 +2692,9 @@ void bonjour_jabber_conv_match_by_ip(BonjourJabberConversation *bconv) {
       && purple_circ_buffer_get_max_read(bconv->tx_buf) > 0) {
     /* Watch for when we can write the buffered messages */
     bconv->tx_handler = purple_input_add(bconv->socket, PURPLE_INPUT_WRITE,
-      _send_data_write_cb, bconv->pb);
+      _send_data_write_cb, bconv);
     /* We can probably write the data right now. */
-    _send_data_write_cb(bconv->pb, bconv->socket, PURPLE_INPUT_WRITE);
+    _send_data_write_cb(bconv, bconv->socket, PURPLE_INPUT_WRITE);
   }
 
 }
@@ -2605,29 +2702,50 @@ void bonjour_jabber_conv_match_by_ip(BonjourJabberConversation *bconv) {
 static void
 _connected_to_buddy_direct(gpointer data, gint socket, PurpleInputCondition condition)
 {
-    PurpleBuddy *pb = data;
-    BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
+    BonjourJabberConversation *bconv = data;
+    PurpleBuddy *pb;
+    BonjourBuddy *bb;
+    int error = 0;
+    socklen_t len = sizeof(error);
 
-    if (!bb || !bb->conversation) {
-        if (socket >= 0) close(socket);
+    if (!bconv || bconv->closing || bconv->close_timeout != 0)
+        return;
+
+    pb = bconv->pb;
+    bb = pb ? purple_buddy_get_protocol_data(pb) : NULL;
+
+    if (bconv->connect_handler != 0) {
+        guint handler = bconv->connect_handler;
+        bconv->connect_handler = 0;
+        purple_input_remove(handler);
+    }
+
+    if (!pb || !bb || bb->conversation != bconv || socket != bconv->socket) {
+        purple_debug_warning("bonjour",
+                             "Ignoring stale direct-connect callback for socket %d\n",
+                             socket);
+        if (socket >= 0 && socket != bconv->socket)
+            close(socket);
+        bonjour_jabber_close_conversation(bconv);
         return;
     }
 
     /* Check if connection succeeded */
-    int error = 0;
-    socklen_t len = sizeof(error);
-    if (getsockopt(socket, SOL_SOCKET, SO_ERROR, &error, &len) < 0 || error != 0) {
+    if (getsockopt(socket, SOL_SOCKET, SO_ERROR, &error, &len) < 0) {
+        error = errno;
+    }
+
+    if (error != 0) {
         purple_debug_error("bonjour", "Direct connection to %s failed: %s\n",
                          purple_buddy_get_name(pb), g_strerror(error));
-        close(socket);
-        bonjour_jabber_close_conversation(bb->conversation);
-        bb->conversation = NULL;
+        bonjour_jabber_close_conversation(bconv);
         return;
     }
 
     /* Connection successful! */
-    purple_debug_info("bonjour", "Direct connection to %s established\n",
-                     purple_buddy_get_name(pb));
+    purple_debug_info("bonjour",
+                     "Direct connection to %s established (conversation=%p fd=%d)\n",
+                     purple_buddy_get_name(pb), bconv, socket);
 
     /* Detect the actual source IP used by the kernel for this connection */
     struct sockaddr_storage local_addr;
@@ -2642,30 +2760,22 @@ _connected_to_buddy_direct(gpointer data, gint socket, PurpleInputCondition cond
             char *percent = strchr(local_ip, '%');
             if (percent) *percent = '\0';
 
-            g_free(bb->conversation->local_ip);
-            bb->conversation->local_ip = g_strdup(local_ip);
+            g_free(bconv->local_ip);
+            bconv->local_ip = g_strdup(local_ip);
             purple_debug_info("bonjour", "Detected source IP for connection: %s\n", local_ip);
         }
     } else {
         purple_debug_warning("bonjour", "Failed to detect source IP: %s\n", g_strerror(errno));
     }
 
-    /* Remove the write handler */
-    if (bb->conversation->rx_handler) {
-        purple_input_remove(bb->conversation->rx_handler);
-        bb->conversation->rx_handler = 0;
-    }
-
     /* Set up read handler */
-    bb->conversation->socket = socket;
-    bb->conversation->rx_handler = purple_input_add(socket, PURPLE_INPUT_READ,
-                                                   _client_socket_handler, bb->conversation);
+    bconv->rx_handler = purple_input_add(socket, PURPLE_INPUT_READ,
+                                         _client_socket_handler, bconv);
 
     /* Send stream init */
-    if (!bonjour_jabber_send_stream_init(bb->conversation, socket)) {
+    if (!bonjour_jabber_send_stream_init(bconv, socket)) {
         purple_debug_error("bonjour", "Failed to send stream init\n");
-        bonjour_jabber_close_conversation(bb->conversation);
-        bb->conversation = NULL;
+        bonjour_jabber_close_conversation(bconv);
     }
 }
 
@@ -2755,15 +2865,18 @@ _find_or_start_conversation(BonjourJabber *jdata, const gchar *to)
                 if (connect(sock, (struct sockaddr*)&addr6, sizeof(addr6)) == 0 ||
                     (errno == EINPROGRESS)) {
                     /* Connection successful or in progress */
-                    bb->conversation = bonjour_jabber_conv_new(pb, jdata->account, ip);
-                    bb->conversation->remote_port = bb->port_p2pj;
+                    BonjourJabberConversation *bconv;
+
+                    bconv = bonjour_jabber_conv_new(pb, jdata->account, ip);
+                    bconv->remote_port = bb->port_p2pj;
+                    bb->conversation = bconv;
                     purple_debug_info("bonjour", "Setting bb->conversation for %s to %p\n",
-                                      purple_buddy_get_name(pb), bb->conversation);
-                    bb->conversation->socket = sock;
+                                      purple_buddy_get_name(pb), bconv);
+                    bconv->socket = sock;
 
                     /* Set up handler for when connection completes */
-                    bb->conversation->rx_handler = purple_input_add(sock, PURPLE_INPUT_WRITE,
-                                                                   _connected_to_buddy_direct, pb);
+                    bconv->connect_handler = purple_input_add(sock, PURPLE_INPUT_WRITE,
+                                                              _connected_to_buddy_direct, bconv);
 
                     purple_debug_info("bonjour", "Direct IPv6 connection to %s:%d\n",
                                      ip, bb->port_p2pj);
@@ -2804,24 +2917,30 @@ _find_or_start_conversation(BonjourJabber *jdata, const gchar *to)
     purple_debug_info("bonjour", "Using proxy_connect with host: %s, port: %d\n",
                      host_for_connect, bb->port_p2pj);
 
+    BonjourJabberConversation *bconv;
+
+    bconv = bonjour_jabber_conv_new(pb, jdata->account, ip);
+    bconv->ip_link = ip;
+    bconv->remote_port = bb->port_p2pj;
+    bb->conversation = bconv;
+
     connect_data = purple_proxy_connect(
                 purple_account_get_connection(jdata->account),
                 jdata->account,
-                host_for_connect, bb->port_p2pj, _connected_to_buddy, pb);
+                host_for_connect, bb->port_p2pj, _connected_to_buddy, bconv);
 
     g_free(host_for_connect);
 
     if (connect_data == NULL) {
       purple_debug_error("bonjour", "Unable to connect to buddy (%s).\n", to);
+      bonjour_jabber_close_conversation(bconv);
       return NULL;
     }
 
-    bb->conversation = bonjour_jabber_conv_new(pb, jdata->account, ip);
     purple_debug_info("bonjour", "Setting bb->conversation for %s to %p\n",
-                  purple_buddy_get_name(pb), bb->conversation);
-    bb->conversation->connect_data = connect_data;
-    bb->conversation->ip_link = ip;
-    bb->conversation->tx_handler = 0;
+                  purple_buddy_get_name(pb), bconv);
+    bconv->connect_data = connect_data;
+    bconv->tx_handler = 0;
   }
   return pb;
 }
@@ -2922,142 +3041,200 @@ bonjour_jabber_send_message(BonjourJabber *jdata, const gchar *to, const gchar *
 }
 
 static gboolean
-_async_bonjour_jabber_close_conversation_cb(gpointer data) {
+_async_bonjour_jabber_close_conversation_cb(gpointer data)
+{
   BonjourJabberConversation *bconv = data;
+
+  if (!bconv || bconv->closing)
+    return FALSE;
+
   bconv->close_timeout = 0;
   bonjour_jabber_close_conversation(bconv);
   return FALSE;
 }
 
 void
-async_bonjour_jabber_close_conversation(BonjourJabberConversation *bconv) {
-  BonjourJabber *jdata = ((BonjourData*) bconv->account->gc->proto_data)->jabber_data;
+async_bonjour_jabber_close_conversation(BonjourJabberConversation *bconv)
+{
+  BonjourJabber *jdata = NULL;
 
-  jdata->pending_conversations = g_slist_remove(jdata->pending_conversations, bconv);
+  if (!bconv || bconv->closing || bconv->close_timeout != 0)
+    return;
 
-  /* Disconnect this conv. from the buddy here so it can't be disposed of twice.*/
-  if(bconv->pb != NULL) {
-    BonjourBuddy *bb = purple_buddy_get_protocol_data(bconv->pb);
-    if (bb->conversation == bconv)
-      bb->conversation = NULL;
+  if (bconv->account && bconv->account->gc &&
+      PURPLE_CONNECTION_IS_VALID(bconv->account->gc) &&
+      bconv->account->gc->proto_data) {
+    BonjourData *bd = bconv->account->gc->proto_data;
+    jdata = bd ? bd->jabber_data : NULL;
   }
 
-  bconv->close_timeout = purple_timeout_add(0, _async_bonjour_jabber_close_conversation_cb, bconv);
+  if (jdata)
+    jdata->pending_conversations =
+        g_slist_remove(jdata->pending_conversations, bconv);
+
+  /* close_timeout makes this conversation logically dead immediately.  Keep
+   * the buddy back-pointer until the destructor runs so it can clear only this
+   * exact conversation and update presence correctly. */
+  purple_debug_info("bonjour",
+                    "Scheduling asynchronous close of conversation %p fd=%d\n",
+                    bconv, bconv->socket);
+  bconv->close_timeout =
+      purple_timeout_add(0, _async_bonjour_jabber_close_conversation_cb, bconv);
 }
 
 void
 bonjour_jabber_close_conversation(BonjourJabberConversation *bconv)
 {
-  if (bconv != NULL) {
-    bonjour_jabber_stop_ping(bconv);
-    BonjourData *bd = NULL;
+  BonjourData *bd = NULL;
+  PurpleBuddy *pb = NULL;
+  BonjourBuddy *bb = NULL;
+  gboolean was_current = FALSE;
 
-    if(PURPLE_CONNECTION_IS_VALID(bconv->account->gc)) {
-      bd = bconv->account->gc->proto_data;
-      bd->jabber_data->pending_conversations = g_slist_remove(bd->jabber_data->pending_conversations, bconv);
-    }
-     if (bconv->pb != NULL) {
-      PurpleBuddy *pb = bconv->pb;
-      PurpleAccount *account = bconv->account;
-      BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
+  if (!bconv || bconv->closing)
+    return;
 
-      if (bb && bb->conversation == bconv) {
-        purple_prpl_got_user_status(account,
-                                            purple_buddy_get_name(pb),
-                                            BONJOUR_STATUS_ID_OFFLINE,
-                                            NULL);
+  bconv->closing = TRUE;
 
-        /* We do NOT have to clear bb->conversation here; async_close and
-         * the callers already handle that safely.
-         */
-      }
-    }
+  purple_debug_info("bonjour",
+                    "Closing conversation %p fd=%d direction=%s peer=%s\n",
+                    bconv, bconv->socket,
+                    bconv->incoming ? "incoming" : "outgoing",
+                    bconv->buddy_name ? bconv->buddy_name :
+                    (bconv->pb ? purple_buddy_get_name(bconv->pb) : "(unknown)"));
 
-    /* Cancel any file transfers that are waiting to begin */
-    /* There wont be any transfers if it hasn't been attached to a buddy */
-    if (bconv->pb != NULL && bd != NULL) {
-      GSList *xfers, *tmp_next;
-      xfers = bd->xfer_lists;
-      while(xfers != NULL) {
-        PurpleXfer *xfer = xfers->data;
-        tmp_next = xfers->next;
-        /* We only need to cancel this if it hasn't actually started transferring. */
-        /* This will change if we ever support IBB transfers. */
-        if (purple_strequal(xfer->who, purple_buddy_get_name(bconv->pb))
-            && (purple_xfer_get_status(xfer) == PURPLE_XFER_STATUS_NOT_STARTED
-              || purple_xfer_get_status(xfer) == PURPLE_XFER_STATUS_UNKNOWN)) {
-          purple_xfer_cancel_remote(xfer);
-        }
-        xfers = tmp_next;
-      }
-    }
-
-    /* removng input handlers to prevent any new data from being
-     * processed while we're tearing down the connection.
-     * this must happen before closing the
-     * socket to avoid race conditions with buffered data. */
-    if (bconv->rx_handler != 0) {
-      purple_input_remove(bconv->rx_handler);
-      bconv->rx_handler = 0;
-    }
-    if (bconv->tx_handler > 0) {
-      purple_input_remove(bconv->tx_handler);
-      bconv->tx_handler = 0;
-    }
-
-    /* cleaning up parser context before freeing bconv to prevent any callbacks
-     * from accessing freed memory. This must happen after removing handlers. */
-    if (bconv->context != NULL)
-      bonjour_parser_setup(bconv);
-
-    /* Close the socket */
-    if (bconv->socket >= 0) {
-      /* Send the end of the stream to the other end of the conversation */
-      if (bconv->sent_stream_start == FULLY_SENT) {
-        size_t len = strlen(STREAM_END);
-        if (send(bconv->socket, STREAM_END, len, 0) != (gssize)len) {
-          purple_debug_error("bonjour",
-            "bonjour_jabber_close_conversation: "
-            "couldn't send data\n");
-        }
-      }
-      /* TODO: We're really supposed to wait for "</stream:stream>" before closing the socket */
-      close(bconv->socket);
-    }
-
-    /* Free all the data related to the conversation */
-    purple_circ_buffer_destroy(bconv->tx_buf);
-    if (bconv->connect_data != NULL)
-      purple_proxy_connect_cancel(bconv->connect_data);
-    if (bconv->stream_data != NULL) {
-      struct _stream_start_data *ss = bconv->stream_data;
-      g_free(ss->msg);
-      g_free(ss);
-    }
-
-    if (bconv->close_timeout != 0){
-      purple_timeout_remove(bconv->close_timeout);
-      bconv->close_timeout = 0;
-    }
-    g_free(bconv->buddy_name);
-    g_free(bconv->ip);
-    g_free(bconv->local_ip);
-    g_free(bconv);
+  /* A synchronous close supersedes a previously queued asynchronous close. */
+  if (bconv->close_timeout != 0) {
+    guint timeout = bconv->close_timeout;
+    bconv->close_timeout = 0;
+    purple_timeout_remove(timeout);
   }
+
+  bonjour_jabber_stop_ping(bconv);
+
+  if (bconv->account && bconv->account->gc &&
+      PURPLE_CONNECTION_IS_VALID(bconv->account->gc) &&
+      bconv->account->gc->proto_data) {
+    bd = bconv->account->gc->proto_data;
+    if (bd && bd->jabber_data) {
+      bd->jabber_data->pending_conversations =
+          g_slist_remove(bd->jabber_data->pending_conversations, bconv);
+    }
+  }
+
+  pb = bconv->pb;
+  if (pb) {
+    bb = purple_buddy_get_protocol_data(pb);
+    was_current = (bb && bb->conversation == bconv);
+
+    /* Clear this in the one function which owns destruction.  Requiring every
+     * caller to clear it after g_free() left several stale-pointer paths. */
+    if (was_current)
+      bb->conversation = NULL;
+
+    if (was_current && bconv->account && bconv->account->gc &&
+        PURPLE_CONNECTION_IS_VALID(bconv->account->gc)) {
+      purple_prpl_got_user_status(bconv->account,
+                                  purple_buddy_get_name(pb),
+                                  BONJOUR_STATUS_ID_OFFLINE,
+                                  NULL);
+    }
+  }
+
+  /* Cancel file transfers which have not started yet. */
+  if (pb && bd) {
+    GSList *xfers = bd->xfer_lists;
+    while (xfers != NULL) {
+      PurpleXfer *xfer = xfers->data;
+      GSList *next = xfers->next;
+
+      if (purple_strequal(xfer->who, purple_buddy_get_name(pb)) &&
+          (purple_xfer_get_status(xfer) == PURPLE_XFER_STATUS_NOT_STARTED ||
+           purple_xfer_get_status(xfer) == PURPLE_XFER_STATUS_UNKNOWN)) {
+        purple_xfer_cancel_remote(xfer);
+      }
+      xfers = next;
+    }
+  }
+
+  /* Remove every source before closing the descriptor or freeing callback
+   * data.  connect_handler is distinct from rx_handler so a stale connect
+   * completion cannot remove a newer read watcher. */
+  if (bconv->connect_handler != 0) {
+    guint handler = bconv->connect_handler;
+    bconv->connect_handler = 0;
+    purple_input_remove(handler);
+  }
+  if (bconv->rx_handler != 0) {
+    guint handler = bconv->rx_handler;
+    bconv->rx_handler = 0;
+    purple_input_remove(handler);
+  }
+  if (bconv->tx_handler != 0) {
+    guint handler = bconv->tx_handler;
+    bconv->tx_handler = 0;
+    purple_input_remove(handler);
+  }
+
+  /* Do not finalise an intentionally open <stream:stream> while tearing down:
+   * finalisation invokes SAX callbacks and reports a false premature-EOF. */
+  bonjour_parser_destroy(bconv);
+
+  if (bconv->socket >= 0) {
+    if (bconv->sent_stream_start == FULLY_SENT) {
+      size_t len = strlen(STREAM_END);
+      if (send(bconv->socket, STREAM_END, len, 0) != (gssize)len) {
+        purple_debug_info("bonjour",
+                          "Could not send stream end while closing: %s\n",
+                          g_strerror(errno));
+      }
+    }
+    close(bconv->socket);
+    bconv->socket = -1;
+  }
+
+  if (bconv->connect_data != NULL) {
+    PurpleProxyConnectData *connect_data = bconv->connect_data;
+    bconv->connect_data = NULL;
+    purple_proxy_connect_cancel(connect_data);
+  }
+
+  if (bconv->stream_data != NULL) {
+    struct _stream_start_data *ss = bconv->stream_data;
+    bconv->stream_data = NULL;
+    g_free(ss->msg);
+    g_free(ss);
+  }
+
+  if (bconv->tx_buf)
+    purple_circ_buffer_destroy(bconv->tx_buf);
+
+  g_free(bconv->buddy_name);
+  g_free(bconv->ip);
+  g_free(bconv->local_ip);
+  g_free(bconv);
 }
 
 void
 bonjour_jabber_stop(BonjourJabber *jdata)
 {
-  /* Close the server socket and remove the watcher */
-  if (jdata->socket >= 0)
-    close(jdata->socket);
-  if (jdata->watcher_id > 0)
+  /* Remove watchers before closing their descriptors.  Otherwise a reused fd
+   * can make a queued server callback run against an unrelated socket. */
+  if (jdata->watcher_id > 0) {
     purple_input_remove(jdata->watcher_id);
-  if (jdata->socket6 >= 0)
-    close(jdata->socket6);
-  if (jdata->watcher_id6 > 0)
+    jdata->watcher_id = 0;
+  }
+  if (jdata->watcher_id6 > 0) {
     purple_input_remove(jdata->watcher_id6);
+    jdata->watcher_id6 = 0;
+  }
+  if (jdata->socket >= 0) {
+    close(jdata->socket);
+    jdata->socket = -1;
+  }
+  if (jdata->socket6 >= 0) {
+    close(jdata->socket6);
+    jdata->socket6 = -1;
+  }
 
   /* Close all the conversation sockets and remove all the watchers after sending end streams */
   if (jdata->account->gc != NULL) {
@@ -3066,13 +3243,8 @@ bonjour_jabber_stop(BonjourJabber *jdata)
     buddies = purple_find_buddies(jdata->account, NULL);
     for (l = buddies; l; l = l->next) {
       BonjourBuddy *bb = purple_buddy_get_protocol_data((PurpleBuddy*) l->data);
-      if (bb && bb->conversation) {
-        /* Any ongoing connection attempt is cancelled
-         * by _purple_connection_destroy */
-        bb->conversation->connect_data = NULL;
+      if (bb && bb->conversation)
         bonjour_jabber_close_conversation(bb->conversation);
-        bb->conversation = NULL;
-      }
     }
 
     g_slist_free(buddies);
@@ -3080,7 +3252,6 @@ bonjour_jabber_stop(BonjourJabber *jdata)
 
   while (jdata->pending_conversations != NULL) {
     bonjour_jabber_close_conversation(jdata->pending_conversations->data);
-    jdata->pending_conversations = g_slist_delete_link(jdata->pending_conversations, jdata->pending_conversations);
   }
 }
 
@@ -3262,7 +3433,8 @@ append_iface_if_linklocal(char *ip, guint32 interface_param) {
 /* Other ping functions */
 /* Send ping request */
 void bonjour_jabber_send_ping_request(BonjourJabberConversation *bconv) {
-  if (!bconv || bconv->socket < 0 || !bconv->pb) {
+  if (!bconv || bconv->closing || bconv->close_timeout != 0 ||
+      bconv->socket < 0 || !bconv->pb) {
     return;
   }
 
@@ -3306,7 +3478,8 @@ void bonjour_jabber_send_ping_request(BonjourJabberConversation *bconv) {
 
 /* Handle incoming ping request */
 gboolean bonjour_jabber_handle_ping(xmlnode *packet, BonjourJabberConversation *bconv) {
-  if (!packet || !bconv) return FALSE;
+  if (!packet || !bconv || bconv->closing || bconv->close_timeout != 0)
+    return FALSE;
 
   const char *type = xmlnode_get_attrib(packet, "type");
   const char *id = xmlnode_get_attrib(packet, "id");

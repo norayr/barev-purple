@@ -28,6 +28,7 @@
 #include "jabber.h"
 
 void bonjour_parser_setup(BonjourJabberConversation *bconv);
+void bonjour_parser_destroy(BonjourJabberConversation *bconv);
 void bonjour_parser_process(BonjourJabberConversation *bconv, const char *buf, int len);
 
 #endif /* _PURPLE_BONJOUR_PARSER_H_ */
