@@ -1,32 +1,5 @@
-CC      ?= gcc
-CFLAGS  ?= -g -O2
-WARN    ?= -Wall -Wextra -Wno-unused-parameter
-PICFLAG ?= -fPIC
-
-# Where to install the plugin:
-PLUGIN_DIR := $(shell pkg-config --variable=plugindir purple)
-
-# Where to install icons:
-DATADIR := $(shell pkg-config --variable=datadir purple)
-ICON_DIR := $(DATADIR)/pixmaps/pidgin/protocols
-
-# Dependencies via pkg-config
-PURPLE_CFLAGS  := $(shell pkg-config --cflags purple)
-PURPLE_LIBS    := $(shell pkg-config --libs purple)
-
-GLIB_CFLAGS    := $(shell pkg-config --cflags glib-2.0)
-GLIB_LIBS      := $(shell pkg-config --libs glib-2.0)
-
-LIBXML_CFLAGS  := $(shell pkg-config --cflags libxml-2.0)
-LIBXML_LIBS    := $(shell pkg-config --libs libxml-2.0)
-
-# Final compiler & linker flags
-CFLAGS += $(WARN) $(PICFLAG) \
-          $(PURPLE_CFLAGS) $(GLIB_CFLAGS) $(LIBXML_CFLAGS) $(AVAHI_CFLAGS)
-
-LDLIBS  = $(PURPLE_LIBS) $(GLIB_LIBS) $(LIBXML_LIBS) $(AVAHI_LIBS)
-
-PLUGIN  = libbarev.so
+PLUGIN = libbarev.so
+ACCOUNT_PLUGIN = libbarev-plugin.so
 
 SRCS = \
   bonjour.c \
@@ -36,38 +9,53 @@ SRCS = \
   bonjour_ft.c
 
 OBJS = $(SRCS:.c=.o)
+ACCOUNT_OBJS = account-plugin.o
+
+# Compiler and linker flags
+CFLAGS := -I/usr/include/libpurple -I/usr/include/glib-2.0 -I/usr/lib/arm-linux-gnueabihf/glib-2.0/include $(shell pkg-config --cflags libxml-2.0)
+LDLIBS := -lpurple -lglib-2.0 $(shell pkg-config --libs libxml-2.0)
+
+# Flags for the account plugin
+ACCOUNT_CFLAGS := -I/usr/include/glib-2.0 -I/usr/lib/arm-linux-gnueabihf/glib-2.0/include $(shell pkg-config --cflags rtcom-accounts-widgets libglade-2.0 telepathy-glib gtk+-2.0)
+ACCOUNT_LDLIBS := $(shell pkg-config --libs rtcom-accounts-widgets libglade-2.0 telepathy-glib gtk+-2.0) -lglib-2.0
 
 .PHONY: all clean install uninstall
 
-all: $(PLUGIN)
+all: $(PLUGIN) $(ACCOUNT_PLUGIN)
 
 $(PLUGIN): $(OBJS)
 	$(CC) -shared -o $@ $(OBJS) $(LDLIBS)
 
+$(ACCOUNT_PLUGIN): $(ACCOUNT_OBJS)
+	$(CC) -shared -o $@ $(ACCOUNT_OBJS) $(ACCOUNT_LDLIBS)
+
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-install: $(PLUGIN)
-	install -d "$(DESTDIR)$(PLUGIN_DIR)"
-	install -m 644 $(PLUGIN) "$(DESTDIR)$(PLUGIN_DIR)"
-	install -d "$(DESTDIR)$(ICON_DIR)/16"
-	install -d "$(DESTDIR)$(ICON_DIR)/22"
-	install -d "$(DESTDIR)$(ICON_DIR)/48"
-	install -d "$(DESTDIR)$(ICON_DIR)/scalable"
-	install -m 644 logo/16/barev.png "$(DESTDIR)$(ICON_DIR)/16/"
-	install -m 644 logo/22/barev.png "$(DESTDIR)$(ICON_DIR)/22/"
-	install -m 644 logo/48/barev.png "$(DESTDIR)$(ICON_DIR)/48/"
-	install -m 644 logo/scalable/barev.svg "$(DESTDIR)$(ICON_DIR)/scalable/"
+account-plugin.o: account-plugin.c
+	$(CC) $(ACCOUNT_CFLAGS) -c $< -o $@
 
-uninstall:
-	rm -f "$(DESTDIR)$(PLUGIN_DIR)/$(PLUGIN)"
-	rm -f "$(DESTDIR)$(ICON_DIR)/16/barev.png"
-	rm -f "$(DESTDIR)$(ICON_DIR)/22/barev.png"
-	rm -f "$(DESTDIR)$(ICON_DIR)/48/barev.png"
-	rm -f "$(DESTDIR)$(ICON_DIR)/scalable/barev.svg"
+install: $(PLUGIN) $(ACCOUNT_PLUGIN)
+	install -d "$(DESTDIR)/usr/lib/purple-2"
+	install -m 644 $(PLUGIN) "$(DESTDIR)/usr/lib/purple-2/"
+	install -d "$(DESTDIR)/usr/lib/arm-linux-gnueabihf/libaccounts-plugins"
+	install -m 644 $(ACCOUNT_PLUGIN) "$(DESTDIR)/usr/lib/arm-linux-gnueabihf/libaccounts-plugins/"
+	install -d "$(DESTDIR)/usr/lib/arm-linux-gnueabihf/libaccounts-plugins/xml"
+	install -m 644 data/barev-advanced.glade "$(DESTDIR)/usr/lib/arm-linux-gnueabihf/libaccounts-plugins/xml/"
+	install -d "$(DESTDIR)/usr/share/pixmaps/pidgin/protocols/16"
+	install -d "$(DESTDIR)/usr/share/pixmaps/pidgin/protocols/22"
+	install -d "$(DESTDIR)/usr/share/pixmaps/pidgin/protocols/48"
+	install -d "$(DESTDIR)/usr/share/pixmaps/pidgin/protocols/scalable"
+	install -m 644 logo/16/barev.png "$(DESTDIR)/usr/share/pixmaps/pidgin/protocols/16/"
+	install -m 644 logo/22/barev.png "$(DESTDIR)/usr/share/pixmaps/pidgin/protocols/22/"
+	install -m 644 logo/48/barev.png "$(DESTDIR)/usr/share/pixmaps/pidgin/protocols/48/"
+	install -m 644 logo/scalable/barev.svg "$(DESTDIR)/usr/share/pixmaps/pidgin/protocols/scalable/"
+	install -d "$(DESTDIR)/usr/share/icons/hicolor/48x48/hildon"
+	install -m 644 logo/48/barev.png "$(DESTDIR)/usr/share/icons/hicolor/48x48/hildon/im-barev.png"
+	install -d "$(DESTDIR)/usr/share/accounts/providers"
+	install -m 644 data/barev.provider "$(DESTDIR)/usr/share/accounts/providers/"
+	install -d "$(DESTDIR)/usr/share/accounts/services"
+	install -m 644 data/barev.service "$(DESTDIR)/usr/share/accounts/services/"
 
 clean:
-	rm -f $(OBJS) $(PLUGIN)
-docs:
-	pandoc -o barev.pdf barev.md --pdf-engine=xelatex  -V geometry:margin=1in
-
+	rm -f $(OBJS) $(ACCOUNT_OBJS) $(PLUGIN) $(ACCOUNT_PLUGIN)
