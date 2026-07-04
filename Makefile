@@ -16,7 +16,7 @@ CFLAGS := -I/usr/include/libpurple -I/usr/include/glib-2.0 -I/usr/lib/arm-linux-
 LDLIBS := -lpurple -lglib-2.0 $(shell pkg-config --libs libxml-2.0)
 
 # Flags for the account plugin
-ACCOUNT_CFLAGS := -I/usr/include/glib-2.0 -I/usr/lib/arm-linux-gnueabihf/glib-2.0/include $(shell pkg-config --cflags rtcom-accounts-widgets libglade-2.0 telepathy-glib gtk+-2.0)
+ACCOUNT_CFLAGS := -I/usr/include/glib-2.0 -I/usr/lib/arm-linux-gnueabihf/glib-2.0/include -I/usr/include/gio-unix-2.0 $(shell pkg-config --cflags rtcom-accounts-widgets libglade-2.0 telepathy-glib gtk+-2.0)
 ACCOUNT_LDLIBS := $(shell pkg-config --libs rtcom-accounts-widgets libglade-2.0 telepathy-glib gtk+-2.0) -lglib-2.0
 
 .PHONY: all clean install uninstall
@@ -41,7 +41,7 @@ install: $(PLUGIN) $(ACCOUNT_PLUGIN)
 	install -d "$(DESTDIR)/usr/lib/arm-linux-gnueabihf/libaccounts-plugins"
 	install -m 644 $(ACCOUNT_PLUGIN) "$(DESTDIR)/usr/lib/arm-linux-gnueabihf/libaccounts-plugins/"
 	install -d "$(DESTDIR)/usr/lib/arm-linux-gnueabihf/libaccounts-plugins/xml"
-	install -m 644 data/barev-advanced.glade "$(DESTDIR)/usr/lib/arm-linux-gnueabihf/libaccounts-plugins/xml/"
+	install -m 644 data/barev-new-account.glade "$(DESTDIR)/usr/lib/arm-linux-gnueabihf/libaccounts-plugins/xml/"
 	install -d "$(DESTDIR)/usr/share/pixmaps/pidgin/protocols/16"
 	install -d "$(DESTDIR)/usr/share/pixmaps/pidgin/protocols/22"
 	install -d "$(DESTDIR)/usr/share/pixmaps/pidgin/protocols/48"
