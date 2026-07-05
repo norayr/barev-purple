@@ -1031,7 +1031,40 @@ is_yggdrasil_addr(const char *host)
     return (val >= 0x0200 && val <= 0x03FF);
 }
 
+/*
+ * Return the local Yggdrasil IPv6 address for the given connected fd.
+ * Tries getsockname() first; if that doesn't yield a Yggdrasil address,
+ * falls back to bonjour_jabber_get_local_ips().
+ * Returns a g_malloc'd string the caller must g_free(), or NULL.
+ */
+static gchar *
+get_local_yggdrasil_ip(int fd)
+{
+    struct sockaddr_storage local_addr;
+    socklen_t addr_len = sizeof(local_addr);
 
+    if (fd >= 0 &&
+        getsockname(fd, (struct sockaddr *)&local_addr, &addr_len) == 0 &&
+        local_addr.ss_family == AF_INET6) {
+        char buf[INET6_ADDRSTRLEN];
+        struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *)&local_addr;
+        inet_ntop(AF_INET6, &addr6->sin6_addr, buf, sizeof(buf));
+        char *pct = strchr(buf, '%');
+        if (pct) *pct = '\0';
+        if (is_yggdrasil_addr(buf))
+            return g_strdup(buf);
+    }
+
+    /* getsockname gave nothing useful — enumerate interfaces */
+    GSList *ips = bonjour_jabber_get_local_ips(-1);
+    if (ips) {
+        gchar *ip = g_strdup((const char *)ips->data);
+        g_slist_free_full(ips, g_free);
+        return ip;
+    }
+
+    return NULL;
+}
 
 /* Barev/XEP-0174 helper:
  * Match "localpart@whatever" to a buddy whose name starts with "localpart@".
@@ -2112,24 +2145,12 @@ _server_socket_handler(gpointer data, int server_socket, PurpleInputCondition co
   bconv->incoming = TRUE;
   bconv->socket = client_socket;
 
-  /* Detect which local IP this connection arrived on so the stream 'from'
-   * JID is correct (without this, incoming connections use "localhost"). */
   {
-    struct sockaddr_storage local_addr;
-    socklen_t addr_len = sizeof(local_addr);
-    if (getsockname(client_socket, (struct sockaddr *)&local_addr, &addr_len) == 0 &&
-        local_addr.ss_family == AF_INET6) {
-      char local_ip[INET6_ADDRSTRLEN];
-      struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *)&local_addr;
-      inet_ntop(AF_INET6, &addr6->sin6_addr, local_ip, INET6_ADDRSTRLEN);
-      char *percent = strchr(local_ip, '%');
-      if (percent) *percent = '\0';
-      /* Only store if we got a real address, not the wildcard :: */
-      if (strcmp(local_ip, "::") != 0) {
-        g_free(bconv->local_ip);
-        bconv->local_ip = g_strdup(local_ip);
-        purple_debug_info("bonjour", "Incoming connection local IP: %s\n", local_ip);
-      }
+    gchar *ygg_ip = get_local_yggdrasil_ip(client_socket);
+    if (ygg_ip) {
+      g_free(bconv->local_ip);
+      bconv->local_ip = ygg_ip;
+      purple_debug_info("bonjour", "Incoming connection local Yggdrasil IP: %s\n", bconv->local_ip);
     }
   }
 
@@ -2363,22 +2384,13 @@ _connected_to_buddy(gpointer data, gint source, const gchar *error)
 
   bconv->socket = source;
 
-  /* Detect the actual source IP for incoming connection */
-  struct sockaddr_storage local_addr;
-  socklen_t addr_len = sizeof(local_addr);
-  if (getsockname(source, (struct sockaddr *)&local_addr, &addr_len) == 0) {
-      if (local_addr.ss_family == AF_INET6) {
-          char local_ip[INET6_ADDRSTRLEN];
-          struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *)&local_addr;
-          inet_ntop(AF_INET6, &addr6->sin6_addr, local_ip, INET6_ADDRSTRLEN);
-
-          char *percent = strchr(local_ip, '%');
-          if (percent) *percent = '\0';
-
-          g_free(bconv->local_ip);
-          bconv->local_ip = g_strdup(local_ip);
-          purple_debug_info("bonjour", "Detected source IP for incoming connection: %s\n", local_ip);
-      }
+  {
+    gchar *ygg_ip = get_local_yggdrasil_ip(source);
+    if (ygg_ip) {
+      g_free(bconv->local_ip);
+      bconv->local_ip = ygg_ip;
+      purple_debug_info("bonjour", "Outgoing connection local Yggdrasil IP: %s\n", bconv->local_ip);
+    }
   }
 
   if (!bonjour_jabber_send_stream_init(bconv, source)) {
@@ -2785,25 +2797,13 @@ _connected_to_buddy_direct(gpointer data, gint socket, PurpleInputCondition cond
                      "Direct connection to %s established (conversation=%p fd=%d)\n",
                      purple_buddy_get_name(pb), bconv, socket);
 
-    /* Detect the actual source IP used by the kernel for this connection */
-    struct sockaddr_storage local_addr;
-    socklen_t addr_len = sizeof(local_addr);
-    if (getsockname(socket, (struct sockaddr *)&local_addr, &addr_len) == 0) {
-        if (local_addr.ss_family == AF_INET6) {
-            char local_ip[INET6_ADDRSTRLEN];
-            struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *)&local_addr;
-            inet_ntop(AF_INET6, &addr6->sin6_addr, local_ip, INET6_ADDRSTRLEN);
-
-            /* Remove scope ID if present */
-            char *percent = strchr(local_ip, '%');
-            if (percent) *percent = '\0';
-
+    {
+        gchar *ygg_ip = get_local_yggdrasil_ip(socket);
+        if (ygg_ip) {
             g_free(bconv->local_ip);
-            bconv->local_ip = g_strdup(local_ip);
-            purple_debug_info("bonjour", "Detected source IP for connection: %s\n", local_ip);
+            bconv->local_ip = ygg_ip;
+            purple_debug_info("bonjour", "Direct connection local Yggdrasil IP: %s\n", bconv->local_ip);
         }
-    } else {
-        purple_debug_warning("bonjour", "Failed to detect source IP: %s\n", g_strerror(errno));
     }
 
     /* Set up read handler */
