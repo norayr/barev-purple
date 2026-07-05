@@ -2111,6 +2111,28 @@ _server_socket_handler(gpointer data, int server_socket, PurpleInputCondition co
   BonjourJabberConversation *bconv = bonjour_jabber_conv_new(NULL, jdata->account, address_text);
   bconv->incoming = TRUE;
   bconv->socket = client_socket;
+
+  /* Detect which local IP this connection arrived on so the stream 'from'
+   * JID is correct (without this, incoming connections use "localhost"). */
+  {
+    struct sockaddr_storage local_addr;
+    socklen_t addr_len = sizeof(local_addr);
+    if (getsockname(client_socket, (struct sockaddr *)&local_addr, &addr_len) == 0 &&
+        local_addr.ss_family == AF_INET6) {
+      char local_ip[INET6_ADDRSTRLEN];
+      struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *)&local_addr;
+      inet_ntop(AF_INET6, &addr6->sin6_addr, local_ip, INET6_ADDRSTRLEN);
+      char *percent = strchr(local_ip, '%');
+      if (percent) *percent = '\0';
+      /* Only store if we got a real address, not the wildcard :: */
+      if (strcmp(local_ip, "::") != 0) {
+        g_free(bconv->local_ip);
+        bconv->local_ip = g_strdup(local_ip);
+        purple_debug_info("bonjour", "Incoming connection local IP: %s\n", local_ip);
+      }
+    }
+  }
+
   bconv->rx_handler = purple_input_add(client_socket, PURPLE_INPUT_READ, _client_socket_handler, bconv);
   purple_debug_info("bonjour",
                     "Accepted incoming conversation %p fd=%d from %s\n",
