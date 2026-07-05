@@ -26,8 +26,9 @@ XB-Maemo-Icon-26:
 Package: barev-purple
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}, pidgin, yggdrasil
-Description: Barev libpurple plugin (XMPP-flavored Bonjour inspired
-serverless protocol that is intended to work over Yggdrasil network)
+Description: Barev libpurple plugin for Yggdrasil
  Barev is an XMPP-flavored adaptation of Bonjour that works over Yggdrasil.
- Provides the libpurple backend used by Telepathy-Haze for maemo-leste's
- Conversations system.
+ It provides a serverless protocol intended to work over the Yggdrasil network.
+ This package provides the libpurple backend used by Telepathy-Haze for
+ maemo-leste's Conversations system.
+
