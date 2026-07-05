@@ -1,3 +1,9 @@
+barev-purple (0.4) unstable; urgency=low
+
+  * Add secrets: inherit to forgejo workflow for package publishing.
+
+ -- Norayr Chilingarian <norayr@arnet.am>  Sat, 05 Jul 2026 14:00:00 +0000
+
 barev-purple (0.3) unstable; urgency=medium
 
   * Add postinst to create yggdrasil openrc init script if absent.
