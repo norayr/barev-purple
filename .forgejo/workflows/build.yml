@@ -1,0 +1,11 @@
+on:
+  workflow_call:
+  push:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+enable-email-notifications: true
+
+jobs:
+  call-reusable-workflow:
+    uses: leste-cicd/forgejo-workflows/.forgejo/workflows/maemo-entry.yml@master
