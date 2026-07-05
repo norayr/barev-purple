@@ -8,27 +8,26 @@ Homepage: https://github.com/norayr/barev-purple
 XSBC-Bugtracker: mailto:norayr@arnet.am
 XSBC-Maemo-Display-Name: Barev Purple
 XB-Maemo-Icon-26:
- iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAAAXNSR0IB2cks
- fwAAAARnQU1BAACxjwv8YQUAAAAgY0hSTQAAeiYAAICEAAD6AAAAgOgAAHUw
- AADqYAAAOpgAABdwnLpRPAAAAAlwSFlzAAAuIwAALiMBeKU/dgAAAAd0SU1F
- B+oCDRMVBjMXR/EAAAIlSURBVGje7ZrLahsxFIY/X5ImdmtDE4LdJDi4dJWt
- 94Es+yAteae+Q+iu26yy7KYliRPS2i1xSJsLuKapx70sLMNQ8BlpLGskyIGD
- xfwaoW90JB0JQ+CWS/leA1gF8sAjYAEoKs8rLygvTim/AzqugQvAG+CvBb8B
- dlwDvLLU+Ym3Z+1Q0bD+S0H7CBwK+jJQB7aApnpWcz0Cx8LX3NNsoxV753LW
- DuUN678QtDTh4BSgllD/u0E7Exu6BFhP0NspAHquR2CaRcBPzXaeZBVCzwTt
- 1KCdZoqwswKwImg/DNqJj0DHJUBD0M5SjsCVS4DHgtY3aKcSK3ddAjwXNJNQ
- 2IiVP7sEKAvadYq5FKmEzhlA08ImVoqVj2zkNnmDetIc+KLZzqrNFcgEYDNB
- 193ECv8lhs6slZDXL2u2s6DS7h6wa6NjuueBmqURiIBtm19WN4SkRO42y0O9
- LkBd0C6yBNANISmRW1JzZGK/gVHsN1J5fxTzoY2zgIm9tXyY/+DTHCCEEFoT
- tF9qaRyoDW2gvvIf5SP1rK98ZCOFMLGc6si0cHjt+yr0FPkK8r3vAI0Eves7
- QGnedzvzBpAus75mvQrNOgJXIQBII/AtBIBy6CHUtHQbkRlAVdA+hQAgpdKD
- 0AG6vgNUE9KIa98BtnzehXUAygn6he8A0hJ6gweWBCClEZ0QACqCdhcCgLSE
- nodwJt4HToBFxn/qWGR8v3kPHPBgs9s/QYContD0WtQAAAAASUVORK5CYII=
+ iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAACPElEQVRo3u2a
+ TW8TMRCGH29CCw20UinQ8qFUQT3RY+/c+SEg/hP/gWuvnDhw4FQo5TMBlajQ
+ gFQiIBs6HOqDL4y9m5VjS1iy4t3XO7vPztietQKZF1PnIhHpAmtAASwC54C2
+ rYWtLVvb/2jvGmP6UWlFpCUij6SZMhKRu7EB7kuz5WDWZ2pX7H9P0faAp4p+
+ AdgANoGePbce2wP7ytt8GGhjx7lmOOszFRX7bylanXCIByAi657+XwNNuWEz
+ iemBGx79oAbA55gA2oArjTE/A+1cmksIAdcV7XUFO70aYdcIwGVF+1HBjuuB
+ fkyArqK9qemBo5gAFxXtpIKdZac9iAlwW9GqhMJNp/0hJkBH0Y5rjKXSGDOK
+ CdCbdRETkSXn8GUT6U0ReOPCMwY+Bt5vrckZqIoHbnn00EWs5bT3mwAITaev
+ ePS3gXY+AS+AVWA3JoCat4emEcaYErjTZIofGkJaIvdtnh/1oQAbinY4T4DQ
+ ENISufMisuMc/wGmzm9p8/7SqRNjzCQmwDXPCv2s4n33gO1UxgA5hNBVRftt
+ 3+jYLmhjQIBTW6f23ImtU2AUjVBEjIicKrsRD1KfhVbRtyCfpw7Q9eiD1AGW
+ PKvrMHWALU9uQ84eOMoBQPPAlxwAOrmHUK+h3Yi5Aawo2vscALRUepw7wCBp
+ ABFZ8aQRx6l7YNOjD1MH6HjSiMPUAbQpdEQCxQegpRH9HACWFe17DgDaFPou
+ h2/ix8ArYIGzP3UscLa/+Qt4wv8ye/kLUcxezx72GRUAAAAASUVORK5CYII=
 
 Package: barev-purple
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}, pidgin, yggdrasil
-Description: Barev libpurple plugin (XMPP-flavored Bonjour over Yggdrasil)
+Description: Barev libpurple plugin (XMPP-flavored Bonjour inspired
+serverless protocol that is intended to work over Yggdrasil network)
  Barev is an XMPP-flavored adaptation of Bonjour that works over Yggdrasil.
  Provides the libpurple backend used by Telepathy-Haze for maemo-leste's
  Conversations system.

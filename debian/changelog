@@ -1,3 +1,9 @@
+barev-purple (0.5) unstable; urgency=low
+
+  * HAM icon made visible.
+
+ -- Norayr Chilingarian <norayr@arnet.am>  Sat, 05 Jul 2026 18:45:00 +0000
+
 barev-purple (0.4) unstable; urgency=low
 
   * Add secrets: inherit to forgejo workflow for package publishing.
