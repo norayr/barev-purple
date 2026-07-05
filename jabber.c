@@ -1083,8 +1083,9 @@ bonjour_find_buddy_by_localpart(PurpleAccount *account, const char *jid)
                 if (!name)
                     continue;
 
-                /* Look for "local@" prefix */
-                if (g_str_has_prefix(name, local) && name[strlen(local)] == '@') {
+                /* Look for "local@" prefix or exact bare-nick match */
+                if ((g_str_has_prefix(name, local) && name[strlen(local)] == '@') ||
+                    g_str_equal(name, local)) {
                     matches++;
                     if (matches == 1) {
                         found = buddy;
@@ -2493,13 +2494,33 @@ bonjour_jabber_conv_match_by_name(BonjourJabberConversation *bconv)
 
     bconv->pb = pb;
 
-    /* Validate the candidate before disturbing an already working stream. */
-    if (!validate_ip_consistency(bconv, purple_buddy_get_name(pb))) {
-      purple_debug_error("bonjour",
-        "Closing connection due to IP mismatch for %s\n",
-        purple_buddy_get_name(pb));
-      async_bonjour_jabber_close_conversation(bconv);
-      return;
+    /* Validate the candidate before disturbing an already working stream.
+     * If the buddy is stored as a bare nick (no '@'), the buddy name has no IP
+     * to check against; use the stream's from-JID instead, which carries the
+     * peer's claimed IP that getpeername() will verify. */
+    {
+      const char *jid_for_validation = purple_buddy_get_name(pb);
+      if (!strchr(jid_for_validation, '@'))
+          jid_for_validation = bconv->buddy_name;
+      if (!validate_ip_consistency(bconv, jid_for_validation)) {
+        purple_debug_error("bonjour",
+          "Closing connection due to IP mismatch for %s\n",
+          purple_buddy_get_name(pb));
+        async_bonjour_jabber_close_conversation(bconv);
+        return;
+      }
+    }
+
+    /* If the buddy had no known IPs (bare-nick entry), learn this IP now that
+     * the connection has been verified via getpeername(). */
+    bb = purple_buddy_get_protocol_data(pb);
+    if (bb && !bb->ips && bconv->ip) {
+        bb->ips = g_slist_append(NULL, g_strdup(bconv->ip));
+        bonjour_buddy_save_to_blist(pb, bconv->ip,
+            bb->port_p2pj > 0 ? bb->port_p2pj : BONJOUR_DEFAULT_PORT);
+        purple_debug_info("bonjour",
+            "Learned IP %s for bare-nick buddy %s from verified connection\n",
+            bconv->ip, purple_buddy_get_name(pb));
     }
 
     if (bb->conversation != NULL && bb->conversation != bconv) {
