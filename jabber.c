@@ -2098,13 +2098,8 @@ _server_socket_handler(gpointer data, int server_socket, PurpleInputCondition co
   g_slist_foreach(buddies, _match_buddies_by_address, mbba);
   g_slist_free(buddies);
 
-  /* If no buddy matches, reject immediately */
-  if (mbba->matched_buddies == NULL) {
-    purple_debug_warning("bonjour", "Rejecting connection from unknown IP: %s\n", address_text);
-    close(client_socket);
-    g_free(mbba);
-    return;
-  }
+  if (mbba->matched_buddies == NULL)
+    purple_debug_warning("bonjour", "No buddy matched IP %s - proceeding to stream negotiation\n", address_text);
 
   /* Clean up match structure */
   if (mbba->matched_buddies)

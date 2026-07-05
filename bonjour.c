@@ -468,69 +468,43 @@ barev_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group)
 
     purple_debug_info("bonjour", "Barev: adding buddy %s\n", full_buddy_name);
 
-    /* Parse buddy string - MUST be in format nick@ipv6 */
     info = parse_barev_buddy_string(full_buddy_name);
-    if (!info) {
-        purple_debug_error("bonjour", "Failed to parse buddy %s - must be nick@ipv6\n",
-                           full_buddy_name);
-        purple_notify_error(gc, "Invalid Buddy Format",
-                            "Barev buddies must be in format: nick@ipv6_address",
-                            full_buddy_name);
 
-        purple_account_remove_buddy(gc->account, buddy, group);
-        purple_blist_remove_buddy(buddy);
-        return;
-    }
-
-    /* Create BonjourBuddy */
     bb = g_new0(BonjourBuddy, 1);
-
-    /* Store full JID-like name in bb->name, so Jabber side uses the same string */
-    bb->name    = g_strdup(full_buddy_name);   /* e.g. "inky@201:..." */
+    bb->name    = g_strdup(full_buddy_name);
     bb->account = gc->account;
-    bb->port_p2pj = info->port;
 
-    if (info->ipv6_address) {
-        bb->ips = g_slist_append(NULL, g_strdup(info->ipv6_address));
-        purple_debug_info("bonjour", "Barev: buddy %s has IPv6: %s\n",
-                          info->nick, info->ipv6_address);
-    } else {
-        purple_debug_error("bonjour", "Barev: buddy %s has no IPv6!\n", info->nick);
-        /* If no IPv6, this is also invalid */
-        bonjour_buddy_delete(bb);
+    if (info) {
+        bb->port_p2pj = info->port;
+        if (info->ipv6_address)
+            bb->ips = g_slist_append(NULL, g_strdup(info->ipv6_address));
+        bb->first = g_strdup(info->nick);
+        purple_blist_alias_buddy(buddy, info->nick);
+        bonjour_buddy_save_to_blist(buddy, info->ipv6_address, info->port);
+        purple_debug_info("bonjour", "Barev: buddy %s ip=%s port=%d\n",
+                          info->nick,
+                          info->ipv6_address ? info->ipv6_address : "(none)",
+                          info->port);
         g_free(info->nick);
         g_free(info->ipv6_address);
         g_free(info);
-
-        purple_account_remove_buddy(gc->account, buddy, group);
-        purple_blist_remove_buddy(buddy);
-        return;
+    } else {
+        purple_debug_warning("bonjour", "Barev: buddy name '%s' not in nick@ipv6 format; "
+                             "bb->ips left empty (blist.xml or stream will provide IP)\n",
+                             full_buddy_name);
+        bb->first = g_strdup(full_buddy_name);
     }
 
-    /* Default metadata */
-    bb->first  = g_strdup(info->nick);
     bb->last   = g_strdup("");
     bb->status = g_strdup("offline");
     bb->msg    = g_strdup("");
 
-    /* Attach to Purple buddy */
     purple_buddy_set_protocol_data(buddy, bb);
 
-    /* Human-friendly alias: just nick */
-    purple_blist_alias_buddy(buddy, info->nick);
-
-    /* Persist contact to blist.xml */
-    bonjour_buddy_save_to_blist(buddy, info->ipv6_address, info->port);
-
-    /* Do NOT mark them online here – we only do that when a stream is up */
     purple_prpl_got_user_status(gc->account,
                                 full_buddy_name,
                                 BONJOUR_STATUS_ID_OFFLINE,
                                 NULL);
-
-    g_free(info->nick);
-    g_free(info->ipv6_address);
-    g_free(info);
 }
 
 static char *default_firstname;
