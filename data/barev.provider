@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<provider>
-    <name>Barev</name>
-    <description>XMPP-flavored Bonjour over Yggdrasil</description>
-    <icon>im-barev</icon>
-    <translations>barev</translations>
-    <domains></domains>
-</provider>

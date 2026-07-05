@@ -1,0 +1,12 @@
+barev-purple (0.1-2) unstable; urgency=medium
+
+  * Move rtcom accounts plugin to separate rtcom-accounts-plugin-barev package.
+  * Package now installs only the libpurple backend plugin.
+
+ -- Norayr Chilingarian <norayr@arnet.am>  Sat, 05 Jul 2026 00:00:00 +0000
+
+barev-purple (0.1-1) unstable; urgency=medium
+
+  * Initial release for maemo-leste.
+
+ -- Norayr Chilingarian <norayr@arnet.am>  Sat, 04 Jul 2026 00:00:00 +0000
