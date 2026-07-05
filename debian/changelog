@@ -1,3 +1,9 @@
+barev-purple (0.6) unstable; urgency=low
+
+  * fixed bug that did not show up when using in between pidgins.
+
+ -- Norayr Chilingarian <norayr@arnet.am>  Sat, 05 Jul 2026 21:36:00 +0000
+
 barev-purple (0.5) unstable; urgency=low
 
   * HAM icon made visible.
