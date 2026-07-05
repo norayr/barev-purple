@@ -1,3 +1,9 @@
+barev-purple (0.8) unstable; urgency=low
+
+  * detecting local ip on incoming connections so stream uses real ip instead of localhost.
+
+ -- Norayr Chilingarian <norayr@arnet.am>  Sun, 06 Jul 2026 03:30:00 +0000
+
 barev-purple (0.7) unstable; urgency=low
 
   * removing tcp-level ip rejection so telepathy-haze connections are not reset.
