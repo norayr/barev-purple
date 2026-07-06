@@ -1,3 +1,11 @@
+barev-purple (1.3) unstable; urgency=low
+
+  * allowing bare-nick buddies to match full jid stream-from when localpart
+    is identical after ip match: haze renames nick@ipv6 to bare nick so the
+    name mismatch guard in conv_match_by_ip was rejecting valid connections.
+
+ -- Norayr Chilingarian <norayr@arnet.am>  Sun, 06 Jul 2026 18:30:00 +0000
+
 barev-purple (1.2) unstable; urgency=low
 
   * saving ip to account settings (keyed by localpart) so it survives haze
