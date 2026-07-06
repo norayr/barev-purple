@@ -1,3 +1,10 @@
+barev-purple (1.0) unstable; urgency=low
+
+  * fixing late tofu match: calling stream_started when buddy is matched on a packet after the stream header so presence exchange is not skipped.
+  * exposing sent_stream_start enum in jabber.h so parser.c can reference it.
+
+ -- Norayr Chilingarian <norayr@arnet.am>  Sun, 06 Jul 2026 05:30:00 +0000
+
 barev-purple (0.9) unstable; urgency=low
 
   * extracting get_local_yggdrasil_ip helper: replacing three duplicate getsockname blocks with a single function that validates yggdrasil prefix and falls back to interface enumeration.

@@ -252,6 +252,13 @@ bonjour_parser_element_start_libxml(void *user_data,
          by using the IP */
       bonjour_jabber_conv_match_by_ip(bconv);
 
+    /* If we just matched a buddy for the first time on this stanza (TOFU
+     * succeeded late — stream_started was already called with pb==NULL and
+     * skipped the presence/ping setup), kick off that exchange now. */
+    if (bconv->pb != NULL && bconv->ping_timer == 0 &&
+        bconv->sent_stream_start == STREAM_FULLY_SENT && bconv->recv_stream_start)
+      bonjour_jabber_stream_started(bconv);
+
     /* Matching can reject this stream and queue destruction.  Do not build a
      * stanza on a conversation which is already logically dead. */
     if (bconv->closing || bconv->close_timeout != 0)
