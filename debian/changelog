@@ -1,3 +1,15 @@
+barev-purple (1.5) unstable; urgency=low
+
+  * adding diagnostic logging for second-connection failure: parse_from logs
+    the incoming from_jid and buddy match result, stream_started logs entry
+    state and when the fully_sent block fires, barev_send_current_presence
+    logs the account status being sent. adding defensive retry in
+    barev_auto_connect_timer: when a connection is alive but ping never
+    started (fully_sent block never ran), stream_started is called again to
+    send presence.
+
+ -- Norayr Chilingarian <norayr@arnet.am>  Mon, 07 Jul 2026 00:30:00 +0000
+
 barev-purple (1.4) unstable; urgency=low
 
   * fixing second and subsequent connections failing to send presence: when
