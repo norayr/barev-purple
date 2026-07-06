@@ -2465,8 +2465,15 @@ bonjour_jabber_conv_match_by_name(BonjourJabberConversation *bconv)
                 bconv->buddy_name ? bconv->buddy_name : "(null)",
                 bconv->ip ? bconv->ip : "(no ip)");
 
-            /* 3) IP match */
+            /* 3) IP match — preserve buddy_name across the call: conv_match_by_ip
+             * clears it internally, but the second validate_ip_consistency below
+             * needs it as a JID fallback when the matched buddy is a bare nick. */
+            gchar *saved_buddy_name = g_strdup(bconv->buddy_name);
             bonjour_jabber_conv_match_by_ip(bconv);
+            if (bconv->buddy_name == NULL)
+                bconv->buddy_name = saved_buddy_name;
+            else
+                g_free(saved_buddy_name);
             if (bconv->closing || bconv->close_timeout != 0)
                 return;
             pb = bconv->pb;
@@ -2493,7 +2500,12 @@ bonjour_jabber_conv_match_by_name(BonjourJabberConversation *bconv)
                              purple_buddy_get_name(pb));
 
         /* Fall back to IP match */
+        gchar *saved_buddy_name2 = g_strdup(bconv->buddy_name);
         bonjour_jabber_conv_match_by_ip(bconv);
+        if (bconv->buddy_name == NULL)
+            bconv->buddy_name = saved_buddy_name2;
+        else
+            g_free(saved_buddy_name2);
         if (bconv->closing || bconv->close_timeout != 0)
             return;
         pb = bconv->pb;
