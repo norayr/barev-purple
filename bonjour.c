@@ -322,8 +322,21 @@ barev_auto_connect_timer(gpointer data)
 
       if (bconv->socket >= 0 && is_socket_really_connected(bconv->socket)) {
         purple_debug_info("bonjour",
-                          "Barev: buddy %s really connected\n",
-                          who ? who : "(null)");
+                          "Barev: buddy %s really connected (sent=%d ping_timer=%u)\n",
+                          who ? who : "(null)",
+                          bconv->sent_stream_start, bconv->ping_timer);
+
+        /* Stream is fully up on both sides but the FULLY_SENT block never fired
+         * (ping not started).  Retry stream_started so presence gets sent. */
+        if (bconv->sent_stream_start == STREAM_FULLY_SENT &&
+            bconv->recv_stream_start &&
+            bconv->ping_timer == 0) {
+          purple_debug_info("bonjour",
+              "Barev: buddy %s connected but no ping/presence — retrying stream_started\n",
+              who ? who : "(null)");
+          bonjour_jabber_stream_started(bconv);
+        }
+
         continue;
       }
 

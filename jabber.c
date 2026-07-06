@@ -1701,6 +1701,10 @@ barev_send_current_presence_to_buddy(PurpleBuddy *pb)
     stype = purple_status_get_type(status);
     id = stype ? purple_status_type_get_id(stype) : NULL;
 
+    purple_debug_info("bonjour",
+        "barev_send_current_presence_to_buddy: %s account_status=%s\n",
+        purple_buddy_get_name(pb), id ? id : "(null)");
+
     if (id && g_strcmp0(id, BONJOUR_STATUS_ID_OFFLINE) == 0) {
         offline = TRUE;
     } else if (id && g_strcmp0(id, BONJOUR_STATUS_ID_AWAY) == 0) {
@@ -1996,6 +2000,12 @@ void bonjour_jabber_stream_started(BonjourJabberConversation *bconv) {
   if (!bconv || bconv->closing || bconv->close_timeout != 0)
     return;
 
+  purple_debug_info("bonjour",
+      "stream_started: bconv=%p sent=%d recv=%d pb=%s closing=%d close_timeout=%u\n",
+      bconv, bconv->sent_stream_start, bconv->recv_stream_start,
+      bconv->pb ? purple_buddy_get_name(bconv->pb) : "(null)",
+      bconv->closing, bconv->close_timeout);
+
   if (bconv->sent_stream_start == NOT_SENT &&
       !bonjour_jabber_send_stream_init(bconv, bconv->socket)) {
     const char *err = g_strerror(errno);
@@ -2047,6 +2057,10 @@ void bonjour_jabber_stream_started(BonjourJabberConversation *bconv) {
 
     PurpleBuddy *pb = bconv->pb;
     BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
+
+    purple_debug_info("bonjour",
+        "stream_started: FULLY_SENT block firing for %s (ping_timer=%u)\n",
+        purple_buddy_get_name(pb), bconv->ping_timer);
 
     if (bb) {
       /* Start ping mechanism */
