@@ -1,3 +1,11 @@
+barev-purple (1.1) unstable; urgency=low
+
+  * persisting buddy ips to blist.xml on disconnect so contacts survive account disable/enable cycle.
+  * recovering saved ip in barev_add_buddy when haze re-adds a bare-nick contact without the ipv6 address.
+  * removing bonjour_removeallfromlocal: barev contacts are manually added and must not be removed on disconnect.
+
+ -- Norayr Chilingarian <norayr@arnet.am>  Sun, 06 Jul 2026 08:00:00 +0000
+
 barev-purple (1.0) unstable; urgency=low
 
   * fixing late tofu match: calling stream_started when buddy is matched on a packet after the stream header so presence exchange is not skipped.
