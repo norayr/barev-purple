@@ -459,6 +459,27 @@ barev_migrate_flat_file_to_blist(PurpleAccount *account)
     g_free(filename);
 }
 
+static gchar *
+get_localpart(const char *name)
+{
+    const char *at = strchr(name, '@');
+    return at ? g_strndup(name, at - name) : g_strdup(name);
+}
+
+static void
+barev_save_ip_to_account(PurpleAccount *account, const char *name,
+                          const char *ip, int port)
+{
+    gchar *lp  = get_localpart(name);
+    gchar *key = g_strdup_printf("barev_ip_%s", lp);
+    purple_account_set_string(account, key, ip);
+    g_free(key);
+    key = g_strdup_printf("barev_port_%s", lp);
+    purple_account_set_int(account, key, port > 0 ? port : BONJOUR_DEFAULT_PORT);
+    g_free(key);
+    g_free(lp);
+}
+
 static void
 barev_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group)
 {
@@ -481,6 +502,9 @@ barev_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group)
         bb->first = g_strdup(info->nick);
         purple_blist_alias_buddy(buddy, info->nick);
         bonjour_buddy_save_to_blist(buddy, info->ipv6_address, info->port);
+        if (info->ipv6_address)
+            barev_save_ip_to_account(gc->account, full_buddy_name,
+                                     info->ipv6_address, info->port);
         purple_debug_info("bonjour", "Barev: buddy %s ip=%s port=%d\n",
                           info->nick,
                           info->ipv6_address ? info->ipv6_address : "(none)",
@@ -495,7 +519,10 @@ barev_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group)
         bb->first = g_strdup(full_buddy_name);
     }
 
-    /* Recover a previously saved IP if name parsing gave none */
+    /* Recover a previously saved IP if name parsing gave none.
+     * Layer 1: blist node (works when buddy name matches saved name).
+     * Layer 2: account settings keyed by localpart (survives Haze roster
+     *          sync renaming inky@ip → inky). */
     if (!bb->ips) {
         PurpleBlistNode *node = (PurpleBlistNode *)buddy;
         const char *saved_ip = purple_blist_node_get_string(node, "barev_ip");
@@ -507,6 +534,25 @@ barev_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group)
             purple_debug_info("bonjour", "Barev: restored IP from blist for %s: %s\n",
                               full_buddy_name, saved_ip);
         }
+    }
+
+    if (!bb->ips) {
+        gchar *lp  = get_localpart(full_buddy_name);
+        gchar *key = g_strdup_printf("barev_ip_%s", lp);
+        const char *saved_ip = purple_account_get_string(gc->account, key, NULL);
+        g_free(key);
+        if (saved_ip && *saved_ip) {
+            bb->ips = g_slist_append(NULL, g_strdup(saved_ip));
+            key = g_strdup_printf("barev_port_%s", lp);
+            int saved_port = purple_account_get_int(gc->account, key, 0);
+            g_free(key);
+            if (bb->port_p2pj <= 0 && saved_port > 0)
+                bb->port_p2pj = saved_port;
+            purple_debug_info("bonjour",
+                "Barev: restored IP from account settings for %s: %s\n",
+                full_buddy_name, saved_ip);
+        }
+        g_free(lp);
     }
 
     bb->last   = g_strdup("");
@@ -655,8 +701,11 @@ bonjour_close(PurpleConnection *connection)
   for (iter = buddies; iter; iter = iter->next) {
     PurpleBuddy *pb = (PurpleBuddy *)iter->data;
     BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
-    if (bb && bb->ips)
+    if (bb && bb->ips) {
       bonjour_buddy_save_to_blist(pb, (const char *)bb->ips->data, bb->port_p2pj);
+      barev_save_ip_to_account(account, purple_buddy_get_name(pb),
+                               (const char *)bb->ips->data, bb->port_p2pj);
+    }
     purple_prpl_got_user_status(account,
                                 purple_buddy_get_name(pb),
                                 BONJOUR_STATUS_ID_OFFLINE, NULL);

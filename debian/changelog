@@ -1,3 +1,13 @@
+barev-purple (1.2) unstable; urgency=low
+
+  * saving ip to account settings (keyed by localpart) so it survives haze
+    roster sync renaming inky@ipv6 to bare inky when eds loses the ipv6 part.
+  * adding barev_save_ip_to_account helper called both on add and on close.
+  * recovering ip from account settings in barev_add_buddy as a third fallback
+    after name parsing and blist node lookup both fail.
+
+ -- Norayr Chilingarian <norayr@arnet.am>  Sun, 06 Jul 2026 11:00:00 +0000
+
 barev-purple (1.1) unstable; urgency=low
 
   * persisting buddy ips to blist.xml on disconnect so contacts survive account disable/enable cycle.
