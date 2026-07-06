@@ -2663,12 +2663,25 @@ void bonjour_jabber_conv_match_by_ip(BonjourJabberConversation *bconv) {
    if (bconv->buddy_name &&
         PURPLE_BLIST_NODE_SHOULD_SAVE((PurpleBlistNode *)pb) &&
         !purple_strequal(bconv->buddy_name, purple_buddy_get_name(pb))) {
-      purple_debug_warning("barev",
-          "Buddy %s is manually saved but remote claims to be '%s' (IP %s) - "
-          "rejecting IP-only match (name mismatch)\n",
-          purple_buddy_get_name(pb), bconv->buddy_name, bconv->ip);
-      buddies_in = buddies_in->next;
-      continue;
+      /* Allow bare-nick buddies (Haze strips @ip during roster sync) to match
+       * a full JID stream-from when the localpart is the same — the IP match
+       * already confirmed which endpoint we are talking to. */
+      const char *pb_name = purple_buddy_get_name(pb);
+      const char *at = strchr(bconv->buddy_name, '@');
+      gboolean localpart_ok = (!strchr(pb_name, '@') && at &&
+                               (gsize)(at - bconv->buddy_name) == strlen(pb_name) &&
+                               strncmp(bconv->buddy_name, pb_name, strlen(pb_name)) == 0);
+      if (!localpart_ok) {
+        purple_debug_warning("barev",
+            "Buddy %s is manually saved but remote claims to be '%s' (IP %s) - "
+            "rejecting IP-only match (name mismatch)\n",
+            pb_name, bconv->buddy_name, bconv->ip);
+        buddies_in = buddies_in->next;
+        continue;
+      }
+      purple_debug_info("bonjour",
+          "Bare-nick buddy '%s' accepting stream from '%s' by localpart (IP already verified)\n",
+          pb_name, bconv->buddy_name);
     }
 
     g_free(bconv->buddy_name);
