@@ -266,7 +266,8 @@ bonjour_buddy_save_to_blist(PurpleBuddy *pb, const char *ip, int port)
 
   if (ip && *ip)
     purple_blist_node_set_string(node, "barev_ip", ip);
-  purple_blist_node_set_int(node, "barev_port", port);
+  if (port > 0)
+    purple_blist_node_set_int(node, "barev_port", port);
 }
 
 /**

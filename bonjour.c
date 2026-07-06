@@ -502,6 +502,19 @@ barev_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group)
 
     purple_debug_info("bonjour", "Barev: adding buddy %s\n", full_buddy_name);
 
+    /* Haze calls add_buddy again on reconnect for contacts it remembers from
+     * Mission Control.  If we already have protocol_data (from blist.xml load
+     * or a previous add_buddy call) keep it — overwriting loses bb->ips,
+     * bb->conversation, and any other live state. */
+    if (purple_buddy_get_protocol_data(buddy) != NULL) {
+        purple_debug_info("bonjour",
+            "Barev: buddy %s already has protocol_data, skipping re-init\n",
+            full_buddy_name);
+        /* Still ensure NO_SAVE is cleared so the buddy persists across restarts. */
+        bonjour_buddy_save_to_blist(buddy, NULL, 0);
+        return;
+    }
+
     info = parse_barev_buddy_string(full_buddy_name);
 
     bb = g_new0(BonjourBuddy, 1);
@@ -530,6 +543,10 @@ barev_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group)
                              "bb->ips left empty (blist.xml or stream will provide IP)\n",
                              full_buddy_name);
         bb->first = g_strdup(full_buddy_name);
+        /* Clear NO_SAVE unconditionally: even bare-nick contacts must survive
+         * across disable/re-enable so Haze does not remove them from MC and
+         * osso-abook does not drop the EDS contact field. */
+        bonjour_buddy_save_to_blist(buddy, NULL, BONJOUR_DEFAULT_PORT);
     }
 
     /* Recover a previously saved IP if name parsing gave none.
