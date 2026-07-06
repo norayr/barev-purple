@@ -85,6 +85,13 @@ parse_from_attrib_and_find_buddy(BonjourJabberConversation *bconv, int nb_attrib
       int len = attributes[i+4] - attributes[i+3];
       char *from_jid = g_strndup((char *)attributes[i+3], len);
 
+      purple_debug_info("bonjour",
+          "parse_from: from_jid='%s' bconv->pb=%s bconv->buddy_name='%s' ip='%s'\n",
+          from_jid,
+          bconv->pb ? purple_buddy_get_name(bconv->pb) : "(null)",
+          bconv->buddy_name ? bconv->buddy_name : "(null)",
+          bconv->ip ? bconv->ip : "(null)");
+
       /* If we already have a buddy attached, check if the "from" matches */
       if (bconv->pb != NULL) {
           const char *current_buddy_name = purple_buddy_get_name(bconv->pb);
@@ -206,6 +213,11 @@ parse_from_attrib_and_find_buddy(BonjourJabberConversation *bconv, int nb_attrib
       bconv->buddy_name = from_jid;
       bonjour_jabber_conv_match_by_name(bconv);
 
+      purple_debug_info("bonjour",
+          "parse_from: after conv_match_by_name for '%s': pb=%s\n",
+          from_jid,
+          bconv->pb ? purple_buddy_get_name(bconv->pb) : "(null)");
+
       return (bconv->pb != NULL);
     }
   }
@@ -236,8 +248,13 @@ bonjour_parser_element_start_libxml(void *user_data,
       /* Always parse and validate the "from" attribute, even if we already have a buddy */
       parse_from_attrib_and_find_buddy(bconv, nb_attributes, attributes);
 
-      if (!bconv->closing && bconv->close_timeout == 0)
+      if (!bconv->closing && bconv->close_timeout == 0) {
+        purple_debug_info("bonjour",
+            "parser: calling stream_started after <stream> — pb=%s sent=%d\n",
+            bconv->pb ? purple_buddy_get_name(bconv->pb) : "(null)",
+            bconv->sent_stream_start);
         bonjour_jabber_stream_started(bconv);
+      }
     }
   } else {
 
