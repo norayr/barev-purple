@@ -1,3 +1,16 @@
+barev-purple (1.6) unstable; urgency=low
+
+  * fixing barev contact field disappearing from osso-abook contact page:
+    bare-nick buddies (without ipv6 in the name) never had the NO_SAVE flag
+    cleared in barev_add_buddy. on haze restart or account toggle the buddy
+    was absent from blist.xml, haze removed it from mission control, and
+    osso-abook dropped the eds field. unconditionally clearing NO_SAVE for
+    all manually-added buddies so they survive restarts. also guarding
+    against haze re-calling add_buddy on reconnect overwriting existing
+    protocol_data with a fresh empty struct.
+
+ -- Norayr Chilingarian <norayr@arnet.am>  Mon, 07 Jul 2026 02:30:00 +0000
+
 barev-purple (1.5) unstable; urgency=low
 
   * adding diagnostic logging for second-connection failure: parse_from logs
