@@ -36,6 +36,12 @@
 
 #define STREAM_END "</stream:stream>"
 
+typedef enum {
+  STREAM_NOT_SENT  = 0,
+  STREAM_PARTIALLY_SENT = 1,
+  STREAM_FULLY_SENT = 2
+} StreamSentState;
+
 typedef struct _BonjourJabber
 {
   gint port;

@@ -104,11 +104,9 @@ typedef struct {
     int avatar_img_id; /* 0 if none */
 } BarevUserInfoCloseData;
 
-enum sent_stream_start_types {
-  NOT_SENT       = 0,
-  PARTIALLY_SENT = 1,
-  FULLY_SENT     = 2
-};
+#define NOT_SENT       STREAM_NOT_SENT
+#define PARTIALLY_SENT STREAM_PARTIALLY_SENT
+#define FULLY_SENT     STREAM_FULLY_SENT
 
 typedef struct {
     PurpleAccount *account;
