@@ -495,6 +495,20 @@ barev_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group)
         bb->first = g_strdup(full_buddy_name);
     }
 
+    /* Recover a previously saved IP if name parsing gave none */
+    if (!bb->ips) {
+        PurpleBlistNode *node = (PurpleBlistNode *)buddy;
+        const char *saved_ip = purple_blist_node_get_string(node, "barev_ip");
+        int saved_port = purple_blist_node_get_int(node, "barev_port");
+        if (saved_ip && *saved_ip) {
+            bb->ips = g_slist_append(NULL, g_strdup(saved_ip));
+            if (bb->port_p2pj <= 0 && saved_port > 0)
+                bb->port_p2pj = saved_port;
+            purple_debug_info("bonjour", "Barev: restored IP from blist for %s: %s\n",
+                              full_buddy_name, saved_ip);
+        }
+    }
+
     bb->last   = g_strdup("");
     bb->status = g_strdup("offline");
     bb->msg    = g_strdup("");
@@ -518,34 +532,6 @@ bonjour_get_jid(PurpleAccount *account)
   return bd->jid;
 }
 
-static void
-bonjour_removeallfromlocal(PurpleConnection *conn, PurpleGroup *bonjour_group)
-{
-  PurpleAccount *account = purple_connection_get_account(conn);
-  PurpleBlistNode *cnode, *cnodenext, *bnode, *bnodenext;
-  PurpleBuddy *buddy;
-
-  if (bonjour_group == NULL)
-    return;
-
-  /* Go through and remove all buddies that belong to this account */
-  for (cnode = purple_blist_node_get_first_child((PurpleBlistNode *) bonjour_group); cnode; cnode = cnodenext) {
-    cnodenext = purple_blist_node_get_sibling_next(cnode);
-    if (!PURPLE_BLIST_NODE_IS_CONTACT(cnode))
-      continue;
-    for (bnode = purple_blist_node_get_first_child(cnode); bnode; bnode = bnodenext) {
-      bnodenext = purple_blist_node_get_sibling_next(bnode);
-      if (!PURPLE_BLIST_NODE_IS_BUDDY(bnode))
-        continue;
-      buddy = (PurpleBuddy *) bnode;
-      if (purple_buddy_get_account(buddy) != account)
-        continue;
-      purple_account_remove_buddy(account, buddy, NULL);
-      purple_blist_remove_buddy(buddy);
-    }
-  }
-
-}
 
 static void
 bonjour_login_barev(PurpleAccount *account)
@@ -659,13 +645,23 @@ bonjour_login(PurpleAccount *account)
 static void
 bonjour_close(PurpleConnection *connection)
 {
-  PurpleGroup *bonjour_group;
   BonjourData *bd = connection->proto_data;
+  PurpleAccount *account = purple_connection_get_account(connection);
 
-  bonjour_group = purple_find_group(BONJOUR_GROUP_NAME);
-
-  /* Remove all the bonjour buddies */
-  bonjour_removeallfromlocal(connection, bonjour_group);
+  /* Barev buddies are manually added contacts — persist their IPs and mark
+   * them offline instead of removing them from the buddy list. */
+  GSList *buddies = purple_find_buddies(account, NULL);
+  GSList *iter;
+  for (iter = buddies; iter; iter = iter->next) {
+    PurpleBuddy *pb = (PurpleBuddy *)iter->data;
+    BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
+    if (bb && bb->ips)
+      bonjour_buddy_save_to_blist(pb, (const char *)bb->ips->data, bb->port_p2pj);
+    purple_prpl_got_user_status(account,
+                                purple_buddy_get_name(pb),
+                                BONJOUR_STATUS_ID_OFFLINE, NULL);
+  }
+  g_slist_free(buddies);
 
   /* Barev-only: just stop Jabber listener, no mDNS */
   if (bd != NULL && bd->jabber_data != NULL)
@@ -678,10 +674,6 @@ bonjour_close(PurpleConnection *connection)
     purple_timeout_remove(bd->reconnect_timer);
     bd->reconnect_timer = 0;
   }
-
-  /* Delete the bonjour group */
-  if (bonjour_group != NULL)
-    purple_blist_remove_group(bonjour_group);
 
   /* Cancel any file transfers (unchanged) */
   while (bd != NULL && bd->xfer_lists != NULL)
