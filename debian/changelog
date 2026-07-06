@@ -1,3 +1,17 @@
+barev-purple (1.4) unstable; urgency=low
+
+  * fixing second and subsequent connections failing to send presence: when
+    bonjour_find_buddy_by_localpart returns null due to ambiguous localpart
+    (both 'inky' and 'inky@ip' in blist), conv_match_by_ip is called and
+    clears bconv->buddy_name internally. the second validate_ip_consistency
+    call in conv_match_by_name then receives a null jid and returns false,
+    closing a perfectly valid incoming connection. stream was sent but
+    presence was never delivered so the peer never appeared online. fixed by
+    preserving bconv->buddy_name across both conv_match_by_ip call sites
+    in conv_match_by_name so the jid fallback works for bare-nick buddies.
+
+ -- Norayr Chilingarian <norayr@arnet.am>  Sun, 06 Jul 2026 20:00:00 +0000
+
 barev-purple (1.3) unstable; urgency=low
 
   * allowing bare-nick buddies to match full jid stream-from when localpart
