@@ -1,3 +1,14 @@
+barev-purple (2.3) unstable; urgency=low
+
+  * adding impersonation guard in auto_learn: when the stream from-jid
+    encodes an ipv6 address, verifying it matches the actual peer ip from
+    getpeername. a peer at 201:evil:... claiming from="inky@201:b570:..."
+    would otherwise get auto-learned under the wrong identity and lock the
+    real inky out. yggdrasil ips are cryptographically bound to public keys
+    so a mismatch unambiguously indicates a lying peer.
+
+ -- Norayr Chilingarian <norayr@arnet.am>  Wed, 08 Jul 2026 01:00:00 +0000
+
 barev-purple (2.2) unstable; urgency=low
 
   * fixing contacts file written to haze temp dir instead of ~/.purple:

@@ -2010,6 +2010,27 @@ barev_auto_learn_buddy(BonjourJabberConversation *bconv)
     if (!jid || !*jid || !ip || !*ip || !account)
         return;
 
+    /* When the JID encodes an IPv6 address (e.g. "inky@201:b570:..."), verify
+     * that the actual peer address matches.  A peer at 201:evil:... could
+     * otherwise claim from="inky@201:b570:..." and get auto-learned under the
+     * wrong identity, locking the real inky out.  Yggdrasil IPs are
+     * cryptographically bound to public keys, so a mismatch here means the
+     * peer is lying about who they are. */
+    {
+        const char *at = strchr(jid, '@');
+        if (at) {
+            struct in6_addr dummy;
+            if (inet_pton(AF_INET6, at + 1, &dummy) == 1 &&
+                g_ascii_strcasecmp(at + 1, ip) != 0) {
+                purple_debug_warning("bonjour",
+                    "auto_learn: JID '%s' claims IP '%s' but peer is '%s' — "
+                    "rejecting (possible impersonation)\n",
+                    jid, at + 1, ip);
+                return;
+            }
+        }
+    }
+
     /* Already exists (two simultaneous incoming streams from the same peer). */
     pb = purple_find_buddy(account, jid);
     if (pb) {
