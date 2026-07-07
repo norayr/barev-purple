@@ -1,3 +1,13 @@
+barev-purple (1.9) unstable; urgency=low
+
+  * fixing purple_connection_set_state called before loading persistent
+    contacts: haze's connected_cb fired set_list_received with an empty blist,
+    making the initial telepathy contact list empty even when the persistent
+    contacts file had entries. moved the connected state signal to after all
+    contact loading so the full roster is visible to haze from the start.
+
+ -- Norayr Chilingarian <norayr@arnet.am>  Mon, 07 Jul 2026 20:00:00 +0000
+
 barev-purple (1.8) unstable; urgency=low
 
   * adding persistent contacts file surviving haze not calling add_buddy

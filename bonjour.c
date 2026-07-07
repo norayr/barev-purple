@@ -863,10 +863,6 @@ bonjour_login_barev(PurpleAccount *account)
       }
   }
 
-  purple_connection_set_state(gc, PURPLE_CONNECTED);
-
-  purple_debug_info("bonjour", "=== BAREV MODE READY ===\n");
-
   /* 1. Migrate flat file → blist.xml (one-time; no-op on subsequent logins) */
   barev_migrate_flat_file_to_blist(account);
 
@@ -890,7 +886,15 @@ bonjour_login_barev(PurpleAccount *account)
   }
   g_slist_free(buddies);
 
-  /* 4. Start auto-connect timer: keep streams up while reachable */
+  /* Signal connected only after contacts are in blist so that Haze's
+   * connected_cb calls set_list_received() with the full roster already
+   * populated.  Moving this earlier caused set_list_received to see an
+   * empty blist, making the initial Telepathy contact list empty. */
+  purple_connection_set_state(gc, PURPLE_CONNECTED);
+
+  purple_debug_info("bonjour", "=== BAREV MODE READY ===\n");
+
+  /* 5. Start auto-connect timer: keep streams up while reachable */
   bd->reconnect_timer = purple_timeout_add_seconds(30,
                                                    barev_auto_connect_timer,
                                                    gc);
