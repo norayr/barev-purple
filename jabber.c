@@ -2079,6 +2079,32 @@ void bonjour_jabber_stream_started(BonjourJabberConversation *bconv) {
 
     barev_send_current_presence_to_buddy(pb);
 
+  } else if (bconv->sent_stream_start == FULLY_SENT &&
+             bconv->recv_stream_start &&
+             bconv->pb == NULL) {
+
+    /* The stream is up but we couldn't match the remote peer to any
+     * buddy in our roster.  Send our presence anyway so the remote side
+     * at least knows we are online.  We have already sent our stream
+     * header, so the channel is open; just no roster entry to start
+     * ping or update status from. */
+    const char *from = bconv->account ? bonjour_get_jid(bconv->account) : NULL;
+    if (from && *from) {
+      xmlnode *presence_node = xmlnode_new("presence");
+      xmlnode_set_attrib(presence_node, "from", from);
+      if (bconv->buddy_name)
+        xmlnode_set_attrib(presence_node, "to", bconv->buddy_name);
+      barev_presence_add_avatar_update(presence_node, bconv->account);
+      char *xml = xmlnode_to_str(presence_node, NULL);
+      xmlnode_free(presence_node);
+      if (xml) {
+        purple_debug_info("bonjour",
+            "stream_started: sending presence to unknown peer %s\n",
+            bconv->buddy_name ? bconv->buddy_name : "(null)");
+        send(bconv->socket, xml, strlen(xml), 0);
+        g_free(xml);
+      }
+    }
   }
 }
 

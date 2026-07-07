@@ -396,12 +396,158 @@ barev_auto_connect_timer(gpointer data)
 static gchar *
 barev_contacts_filename(PurpleAccount *account)
 {
-  /* This small helper is only intended for the migration functions below */
-  /* to migrate from ~/.purple/barev-contacts-<username>.txt to just blist.xml */
-  /* Once the migration is done, we may consider removing these functions */
+  /* One-time migration source (old flat file, deleted after migration) */
   return g_strdup_printf("%s" G_DIR_SEPARATOR_S "barev-contacts-%s.txt",
                          purple_user_dir(),
                          purple_account_get_username(account));
+}
+
+/* Persistent contacts file — read every startup, never deleted */
+static gchar *
+barev_persistent_filename(PurpleAccount *account)
+{
+  return g_strdup_printf("%s" G_DIR_SEPARATOR_S "barev-contacts-%s.conf",
+                         purple_user_dir(),
+                         purple_account_get_username(account));
+}
+
+/*
+ * Read the persistent contacts file and ensure every listed buddy exists
+ * in the libpurple blist.  Lines: "nick@ipv6" or "nick@ipv6 port".
+ * Comments start with '#'.
+ */
+static void
+barev_load_persistent_contacts(PurpleAccount *account)
+{
+  gchar *filename = barev_persistent_filename(account);
+  gchar *contents = NULL;
+  gsize  len      = 0;
+  char **lines;
+  guint  i, n = 0;
+  PurpleGroup *group;
+
+  if (!g_file_get_contents(filename, &contents, &len, NULL)) {
+    g_free(filename);
+    return;
+  }
+
+  group = purple_find_group(BONJOUR_GROUP_NAME);
+  if (!group) {
+    group = purple_group_new(BONJOUR_GROUP_NAME);
+    purple_blist_add_group(group, NULL);
+  }
+
+  lines = g_strsplit(contents, "\n", 0);
+  for (i = 0; lines[i]; i++) {
+    char *trimmed = g_strstrip(lines[i]);
+    if (!*trimmed || *trimmed == '#')
+      continue;
+
+    char *space = strchr(trimmed, ' ');
+    char *jid;
+    int   port = BONJOUR_DEFAULT_PORT;
+
+    if (space) {
+      jid  = g_strndup(trimmed, (gsize)(space - trimmed));
+      port = atoi(space + 1);
+      if (port <= 0) port = BONJOUR_DEFAULT_PORT;
+    } else {
+      jid = g_strdup(trimmed);
+    }
+
+    if (!strchr(jid, '@')) { g_free(jid); continue; }
+
+    PurpleBuddy *pb = purple_find_buddy(account, jid);
+    if (!pb) {
+      pb = purple_buddy_new(account, jid, NULL);
+      purple_blist_add_buddy(pb, NULL, group, NULL);
+      const char *at = strchr(jid, '@');
+      if (at && at != jid) {
+        char *nick = g_strndup(jid, (gsize)(at - jid));
+        purple_blist_alias_buddy(pb, nick);
+        g_free(nick);
+      }
+    }
+
+    /* Extract IP from JID and persist on the blist node */
+    const char *at  = strchr(jid, '@');
+    const char *ip  = (at && *(at + 1)) ? at + 1 : NULL;
+    bonjour_buddy_save_to_blist(pb, ip, port);
+
+    n++;
+    g_free(jid);
+  }
+
+  g_strfreev(lines);
+  g_free(contents);
+  g_free(filename);
+
+  if (n > 0)
+    purple_debug_info("bonjour",
+        "Loaded %u contact(s) from persistent contacts file\n", n);
+}
+
+/*
+ * Write the current buddy list (those with a known IP) to the persistent
+ * contacts file.  Rewrites the whole file on every call — it is small.
+ */
+static void
+barev_save_persistent_contacts(PurpleAccount *account)
+{
+  GSList  *buddies = purple_find_buddies(account, NULL);
+  GSList  *iter;
+  GString *buf     = g_string_new(NULL);
+
+  for (iter = buddies; iter; iter = iter->next) {
+    PurpleBuddy  *pb   = iter->data;
+    BonjourBuddy *bb   = purple_buddy_get_protocol_data(pb);
+    const char   *name = purple_buddy_get_name(pb);
+    const char   *ip   = NULL;
+    int           port = BONJOUR_DEFAULT_PORT;
+
+    if (!name || !*name) continue;
+
+    if (bb && bb->ips)        ip   = (const char *)bb->ips->data;
+    if (bb && bb->port_p2pj > 0) port = bb->port_p2pj;
+
+    /* Fall back to blist-node setting if protocol_data has no IP */
+    if (!ip) {
+      PurpleBlistNode *node = (PurpleBlistNode *)pb;
+      ip = purple_blist_node_get_string(node, "barev_ip");
+      int np = purple_blist_node_get_int(node, "barev_port");
+      if (np > 0) port = np;
+    }
+
+    if (strchr(name, '@')) {
+      /* JID already encodes the IP */
+      if (port != BONJOUR_DEFAULT_PORT)
+        g_string_append_printf(buf, "%s %d\n", name, port);
+      else
+        g_string_append_printf(buf, "%s\n", name);
+    } else if (ip && *ip) {
+      if (port != BONJOUR_DEFAULT_PORT)
+        g_string_append_printf(buf, "%s@%s %d\n", name, ip, port);
+      else
+        g_string_append_printf(buf, "%s@%s\n", name, ip);
+    }
+    /* skip buddies whose IP is unknown — they'll be saved once IP is learned */
+  }
+
+  g_slist_free(buddies);
+
+  gchar  *filename = barev_persistent_filename(account);
+  GError *err      = NULL;
+  if (!g_file_set_contents(filename, buf->str, (gssize)buf->len, &err)) {
+    purple_debug_warning("bonjour",
+        "Failed to write contacts file %s: %s\n",
+        filename, err ? err->message : "(unknown)");
+    if (err) g_error_free(err);
+  } else {
+    purple_debug_info("bonjour",
+        "Saved contacts to %s (%zu bytes)\n", filename, buf->len);
+  }
+  g_free(filename);
+  g_string_free(buf, TRUE);
 }
 
 /**
@@ -628,6 +774,9 @@ barev_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group)
                                 full_buddy_name,
                                 BONJOUR_STATUS_ID_OFFLINE,
                                 NULL);
+
+    /* Persist so the contact survives Haze clearing its ephemeral roster */
+    barev_save_persistent_contacts(gc->account);
 }
 
 static char *default_firstname;
@@ -721,10 +870,14 @@ bonjour_login_barev(PurpleAccount *account)
   /* 1. Migrate flat file → blist.xml (one-time; no-op on subsequent logins) */
   barev_migrate_flat_file_to_blist(account);
 
-  /* 2. Reconstruct protocol data for every saved contact in blist.xml */
+  /* 2. Load contacts from our own persistent file (survives Haze ephemeral
+   *    contact management which clears blist.xml between sessions). */
+  barev_load_persistent_contacts(account);
+
+  /* 3. Reconstruct protocol data for every saved contact in blist.xml */
   bonjour_buddies_load_from_blist(account);
 
-  /* 3. For any remaining buddies with no protocol_data yet, build bb from name */
+  /* 4. For any remaining buddies with no protocol_data yet, build bb from name */
   GSList *buddies = purple_find_buddies(account, NULL);
   purple_debug_info("bonjour", "Found %d existing buddies\n",
                     g_slist_length(buddies));
@@ -773,6 +926,11 @@ bonjour_close(PurpleConnection *connection)
                                 purple_buddy_get_name(pb),
                                 BONJOUR_STATUS_ID_OFFLINE, NULL);
   }
+
+  /* Save the roster with resolved IPs so contacts survive Haze clearing
+   * its ephemeral MC store between sessions. */
+  barev_save_persistent_contacts(account);
+
   g_slist_free(buddies);
 
   /* Barev-only: just stop Jabber listener, no mDNS */
@@ -923,6 +1081,9 @@ static void bonjour_remove_buddy(PurpleConnection *pc, PurpleBuddy *buddy, Purpl
     purple_debug_info("bonjour", "Removing buddy without protocol data: %s\n",
                       purple_buddy_get_name(buddy));
   }
+
+  /* Rewrite the contacts file without this buddy */
+  barev_save_persistent_contacts(purple_connection_get_account(pc));
 }
 
 static GList *
