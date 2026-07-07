@@ -744,7 +744,7 @@ validate_ip_consistency(BonjourJabberConversation *bconv, const char *from_jid)
                 "</text>"
                 "</stream:error>"
                 "</stream:stream>";
-            send(bconv->socket, error_msg, strlen(error_msg), 0);
+            send(bconv->socket, error_msg, strlen(error_msg), MSG_NOSIGNAL);
         }
 
         g_free(jid_ip);
@@ -876,18 +876,21 @@ static gboolean bonjour_jabber_ping_timer_cb(gpointer data) {
     return FALSE;
   }
 
-  /* Check if we've received any data recently */
   time_t now = time(NULL);
   if (now - bconv->last_activity > PING_INTERVAL * 2) {
-    /* Too long without activity, send ping */
+    PurpleBuddy *pb = bconv->pb;
+    BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
     bonjour_jabber_send_ping_request(bconv);
+    /* bonjour_jabber_send_ping_request may have freed bconv on a send error.
+     * Detect this via bb->conversation and do not reschedule a dead timer. */
+    if (!bb || bb->conversation != bconv)
+      return FALSE;
   } else {
-    /* We've had recent activity, no need to ping yet */
     purple_debug_info("bonjour", "Skipping ping for %s - recent activity\n",
                      purple_buddy_get_name(bconv->pb));
   }
 
-  return TRUE; /* Keep timer running */
+  return TRUE;
 }
 
 /* Start ping mechanism */
@@ -1584,7 +1587,7 @@ _send_data_write_cb(gpointer data, gint source, PurpleInputCondition cond)
     return;
   }
 
-  ret = send(bconv->socket, bconv->tx_buf->outptr, writelen, 0);
+  ret = send(bconv->socket, bconv->tx_buf->outptr, writelen, MSG_NOSIGNAL);
 
   if (ret < 0 && errno == EAGAIN)
     return;
@@ -1642,7 +1645,7 @@ static gint _send_data(PurpleBuddy *pb, char *message)
     ret = -1;
     errno = EAGAIN;
   } else {
-    ret = send(bconv->socket, message, len, 0);
+    ret = send(bconv->socket, message, len, MSG_NOSIGNAL);
   }
 
   if (ret == -1 && errno == EAGAIN)
@@ -1888,7 +1891,7 @@ _start_stream(gpointer data, gint source, PurpleInputCondition condition)
   len = strlen(ss->msg);
 
   /* Start Stream */
-  ret = send(source, ss->msg, len, 0);
+  ret = send(source, ss->msg, len, MSG_NOSIGNAL);
 
   if (ret == -1 && errno == EAGAIN)
     return;
@@ -1953,7 +1956,7 @@ static gboolean bonjour_jabber_send_stream_init(BonjourJabberConversation *bconv
   bconv->sent_stream_start = PARTIALLY_SENT;
 
   /* Start the stream */
-  ret = send(client_socket, stream_start, len, 0);
+  ret = send(client_socket, stream_start, len, MSG_NOSIGNAL);
 
   if (ret == -1 && errno == EAGAIN)
     ret = 0;
@@ -2099,7 +2102,7 @@ void bonjour_jabber_stream_started(BonjourJabberConversation *bconv) {
         "</stream:stream>";
 
     if (bconv->socket >= 0)
-      send(bconv->socket, reject_xml, sizeof(reject_xml) - 1, 0);
+      send(bconv->socket, reject_xml, sizeof(reject_xml) - 1, MSG_NOSIGNAL);
 
     async_bonjour_jabber_close_conversation(bconv);
   }
@@ -3305,7 +3308,7 @@ bonjour_jabber_close_conversation(BonjourJabberConversation *bconv)
   if (bconv->socket >= 0) {
     if (bconv->sent_stream_start == FULLY_SENT) {
       size_t len = strlen(STREAM_END);
-      if (send(bconv->socket, STREAM_END, len, 0) != (gssize)len) {
+      if (send(bconv->socket, STREAM_END, len, MSG_NOSIGNAL) != (gssize)len) {
         purple_debug_info("bonjour",
                           "Could not send stream end while closing: %s\n",
                           g_strerror(errno));

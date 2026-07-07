@@ -1,3 +1,21 @@
+barev-purple (2.5) unstable; urgency=low
+
+  * adding MSG_NOSIGNAL to all send() calls: prevents SIGPIPE delivery when a
+    peer closes its end mid-write. without it, a send() on a broken yggdrasil
+    socket can raise SIGPIPE inside bonjour_jabber_close_conversation (the
+    stream-end send) or inside the tx write callback, potentially crashing
+    pidgin if a signal handler is not properly set to SIG_IGN at that instant.
+    all seven send() sites in jabber.c now use MSG_NOSIGNAL so broken-pipe is
+    returned as EPIPE without signal delivery.
+  * fixing bonjour_jabber_ping_timer_cb returning TRUE after
+    bonjour_jabber_send_ping_request may have freed bconv: capturing pb/bb
+    before the send call and using the bb->conversation stale-pointer check
+    to return FALSE (do not reschedule) when bconv was destroyed by a send
+    error. previously returning TRUE on a freed bconv left glib with an
+    inconsistent timer state.
+
+ -- Norayr Chilingarian <norayr@arnet.am>  Mon, 07 Jul 2026 14:00:00 +0000
+
 barev-purple (2.4) unstable; urgency=low
 
   * removing auto-learn and restoring whitelist-only policy: unknown peers
