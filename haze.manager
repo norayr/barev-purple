@@ -1,0 +1,17 @@
+[ConnectionManager]
+BusName=org.freedesktop.Telepathy.ConnectionManager.haze
+ObjectPath=/org/freedesktop/Telepathy/ConnectionManager/haze
+
+[Protocol barev]
+param-account=s required
+param-port=q
+param-first=s
+param-last=s
+param-email=s
+param-AIM=s
+param-jid=s
+default-port=1337
+Interfaces=org.freedesktop.Telepathy.Protocol.Interface.Presence;
+VCardField=x-barev
+EnglishName=Barev
+Icon=im-barev

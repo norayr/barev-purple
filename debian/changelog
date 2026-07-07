@@ -1,3 +1,12 @@
+barev-purple (2.6) unstable; urgency=low
+
+  * adding haze.manager: declares barev protocol with
+    Protocol.Interface.Presence so mission control queries haze for
+    away/busy statuses and the maemo status applet shows all three
+    states (online, away, busy) instead of just online/offline.
+
+ -- Norayr Chilingarian <norayr@arnet.am>  Wed, 08 Jul 2026 10:00:00 +0000
+
 barev-purple (2.5) unstable; urgency=low
 
   * adding MSG_NOSIGNAL to all send() calls: prevents SIGPIPE delivery when a
