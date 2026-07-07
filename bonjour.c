@@ -491,7 +491,7 @@ barev_load_persistent_contacts(PurpleAccount *account)
  * Write the current buddy list (those with a known IP) to the persistent
  * contacts file.  Rewrites the whole file on every call — it is small.
  */
-static void
+void
 barev_save_persistent_contacts(PurpleAccount *account)
 {
   GSList  *buddies = purple_find_buddies(account, NULL);

@@ -55,5 +55,6 @@ typedef struct _BonjourData
  *  This will always be username@machinename
  */
 const char *bonjour_get_jid(PurpleAccount *account);
+void barev_save_persistent_contacts(PurpleAccount *account);
 
 #endif /* _BONJOUR_H_ */

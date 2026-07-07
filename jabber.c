@@ -2581,12 +2581,35 @@ bonjour_jabber_conv_match_by_name(BonjourJabberConversation *bconv)
     /* Validate the candidate before disturbing an already working stream.
      * If the buddy is stored as a bare nick (no '@'), the buddy name has no IP
      * to check against; use the stream's from-JID instead, which carries the
-     * peer's claimed IP that getpeername() will verify. */
+     * peer's claimed IP that getpeername() will verify.
+     *
+     * Exception: when the buddy was added with a hostname JID (e.g.
+     * "inky@lovelace") and bb->ips is still empty, validate_ip_consistency
+     * would extract "lovelace" as the expected IP and reject the real Yggdrasil
+     * peer address.  Skip the check in that case — the IP-learning block below
+     * will record the address verified by getpeername() and persist it. */
     {
       const char *jid_for_validation = purple_buddy_get_name(pb);
       if (!strchr(jid_for_validation, '@'))
           jid_for_validation = bconv->buddy_name;
-      if (!validate_ip_consistency(bconv, jid_for_validation)) {
+
+      gboolean skip_ip_check = FALSE;
+      bb = purple_buddy_get_protocol_data(pb);
+      if (bb && !bb->ips) {
+        const char *at = strchr(jid_for_validation, '@');
+        if (at) {
+          struct in6_addr dummy;
+          if (inet_pton(AF_INET6, at + 1, &dummy) != 1)
+            skip_ip_check = TRUE;
+        }
+      }
+
+      if (skip_ip_check) {
+        purple_debug_info("bonjour",
+            "conv_match_by_name: skipping IP validation for hostname buddy '%s'"
+            " with no known IPs — will learn IP from this connection\n",
+            purple_buddy_get_name(pb));
+      } else if (!validate_ip_consistency(bconv, jid_for_validation)) {
         purple_debug_error("bonjour",
           "Closing connection due to IP mismatch for %s\n",
           purple_buddy_get_name(pb));
@@ -2595,16 +2618,18 @@ bonjour_jabber_conv_match_by_name(BonjourJabberConversation *bconv)
       }
     }
 
-    /* If the buddy had no known IPs (bare-nick entry), learn this IP now that
-     * the connection has been verified via getpeername(). */
+    /* If the buddy had no known IPs (bare-nick or hostname entry), learn this
+     * IP now that the connection has been accepted. */
     bb = purple_buddy_get_protocol_data(pb);
     if (bb && !bb->ips && bconv->ip) {
         bb->ips = g_slist_append(NULL, g_strdup(bconv->ip));
         bonjour_buddy_save_to_blist(pb, bconv->ip,
             bb->port_p2pj > 0 ? bb->port_p2pj : BONJOUR_DEFAULT_PORT);
         purple_debug_info("bonjour",
-            "Learned IP %s for bare-nick buddy %s from verified connection\n",
+            "Learned IP %s for buddy %s from verified connection\n",
             bconv->ip, purple_buddy_get_name(pb));
+        /* Persist immediately so the IP survives an unclean shutdown */
+        barev_save_persistent_contacts(bconv->account);
     }
 
     if (bb->conversation != NULL && bb->conversation != bconv) {

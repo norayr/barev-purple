@@ -1,3 +1,17 @@
+barev-purple (2.0) unstable; urgency=low
+
+  * fixing incoming connections from hostname-format buddies being rejected:
+    when create_roster runs barev_add_buddy("inky@lovelace"), the buddy has
+    no known ips yet. conv_match_by_name found the buddy via localpart match
+    but validate_ip_consistency then extracted "lovelace" as the expected ip
+    and rejected the real yggdrasil peer address, closing the connection and
+    preventing ip learning. skipping ip validation when bb->ips is empty and
+    the jid's host part is not a valid ipv6 address (it is a hostname). the
+    ip is learned from the accepted connection, written to the blist node, and
+    immediately saved to the contacts file so it survives unclean shutdowns.
+
+ -- Norayr Chilingarian <norayr@arnet.am>  Tue, 07 Jul 2026 22:00:00 +0000
+
 barev-purple (1.9) unstable; urgency=low
 
   * fixing purple_connection_set_state called before loading persistent
