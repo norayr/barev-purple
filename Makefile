@@ -54,9 +54,9 @@ install: $(PLUGIN)
 	install -d "$(DESTDIR)$(ICON_DIR)/22"
 	install -d "$(DESTDIR)$(ICON_DIR)/48"
 	install -d "$(DESTDIR)$(ICON_DIR)/scalable"
-	install -m 644 logo/16/barev.png "$(DESTDIR)$(ICON_DIR)/16/"
-	install -m 644 logo/22/barev.png "$(DESTDIR)$(ICON_DIR)/22/"
-	install -m 644 logo/48/barev.png "$(DESTDIR)$(ICON_DIR)/48/"
+	install -m 644 logo/16/barev_black.png "$(DESTDIR)$(ICON_DIR)/16/barev.png"
+	install -m 644 logo/22/barev_black.png "$(DESTDIR)$(ICON_DIR)/22/barev.png"
+	install -m 644 logo/48/barev_black.png "$(DESTDIR)$(ICON_DIR)/48/barev.png"
 	install -m 644 logo/scalable/barev.svg "$(DESTDIR)$(ICON_DIR)/scalable/"
 
 uninstall:
