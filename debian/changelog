@@ -1,3 +1,13 @@
+barev-purple (1.8) unstable; urgency=low
+
+  * adding persistent contacts file surviving haze not calling add_buddy
+    on reconnect: saving barev roster to ~/.purple/barev-contacts-<nick>.conf
+    and loading it on login so contacts survive haze clearing blist.xml
+    between sessions. the file is rewritten on add/remove buddy and on
+    connection close with resolved ip addresses included.
+
+ -- Norayr Chilingarian <norayr@arnet.am>  Mon, 07 Jul 2026 14:50:00 +0000
+
 barev-purple (1.7) unstable; urgency=low
 
   * adding diagnostic file logger: installing a thin purple_debug_ui_ops
