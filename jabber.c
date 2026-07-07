@@ -2152,10 +2152,18 @@ void bonjour_jabber_stream_started(BonjourJabberConversation *bconv) {
       barev_auto_learn_buddy(bconv);
 
     if (bconv->pb) {
-      /* Auto-learn succeeded: treat like the normal connected path. */
+      /* Auto-learn succeeded: attach the conversation to the buddy and
+       * remove from pending so it is not closed on timeout. */
       BonjourBuddy *bb = purple_buddy_get_protocol_data(bconv->pb);
-      if (bb)
+      if (bb) {
+        bb->conversation = bconv;
+        BonjourJabber *jdata =
+            ((BonjourData *)bconv->account->gc->proto_data)->jabber_data;
+        if (jdata)
+          jdata->pending_conversations =
+              g_slist_remove(jdata->pending_conversations, bconv);
         bonjour_jabber_start_ping(bconv);
+      }
       barev_send_current_presence_to_buddy(bconv->pb);
       return;
     }

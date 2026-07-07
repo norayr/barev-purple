@@ -406,9 +406,13 @@ barev_contacts_filename(PurpleAccount *account)
 static gchar *
 barev_persistent_filename(PurpleAccount *account)
 {
-  return g_strdup_printf("%s" G_DIR_SEPARATOR_S "barev-contacts-%s.conf",
-                         purple_user_dir(),
-                         purple_account_get_username(account));
+  /* Haze sets purple_user_dir() to a per-run temp directory that is deleted
+   * on exit.  Use ~/.purple directly so the file survives across sessions. */
+  gchar *fname = g_strdup_printf("barev-contacts-%s.conf",
+                                 purple_account_get_username(account));
+  gchar *path  = g_build_filename(g_get_home_dir(), ".purple", fname, NULL);
+  g_free(fname);
+  return path;
 }
 
 /*

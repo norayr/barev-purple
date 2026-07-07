@@ -1,3 +1,17 @@
+barev-purple (2.2) unstable; urgency=low
+
+  * fixing contacts file written to haze temp dir instead of ~/.purple:
+    haze sets purple_user_dir() to a per-run temp directory that is deleted
+    on exit. switching barev_persistent_filename to g_get_home_dir()/.purple
+    so the file survives across sessions.
+  * fixing bb->conversation not set after auto-learn: barev_auto_learn_buddy
+    created the buddy but did not attach the incoming bconv to bb->conversation,
+    so barev_send_current_presence_to_buddy failed with "no active conversation".
+    now setting bb->conversation = bconv and removing bconv from pending
+    conversations after a successful auto-learn.
+
+ -- Norayr Chilingarian <norayr@arnet.am>  Wed, 08 Jul 2026 00:30:00 +0000
+
 barev-purple (2.1) unstable; urgency=low
 
   * adding auto-learn of contacts from incoming streams: when stream_started
