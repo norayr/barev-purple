@@ -49,6 +49,39 @@
 
 #include <errno.h>
 #include <sys/socket.h>
+#include <stdio.h>
+
+/* ─── diagnostic file logger (written to /tmp/barev-debug.log) ─── */
+#define BAREV_LOG_FILE "/tmp/barev-debug.log"
+static FILE              *barev_log_fp   = NULL;
+static PurpleDebugUiOps  *barev_orig_ops = NULL;
+
+static void
+barev_diag_print(PurpleDebugLevel level, const char *cat, const char *msg)
+{
+    if (barev_log_fp && cat && strncmp(cat, "bonjour", 7) == 0) {
+        fputs(msg, barev_log_fp);
+        fflush(barev_log_fp);
+    }
+    if (barev_orig_ops && barev_orig_ops->print)
+        barev_orig_ops->print(level, cat, msg);
+}
+
+static PurpleDebugUiOps barev_diag_ops = { barev_diag_print, NULL,
+    NULL, NULL, NULL, NULL };
+
+static void barev_diag_init(void) {
+    if (barev_log_fp) return;
+    barev_log_fp = fopen(BAREV_LOG_FILE, "w");
+    barev_orig_ops = purple_debug_get_ui_ops();
+    purple_debug_set_ui_ops(&barev_diag_ops);
+}
+
+static void barev_diag_cleanup(void) {
+    purple_debug_set_ui_ops(barev_orig_ops);
+    barev_orig_ops = NULL;
+    if (barev_log_fp) { fclose(barev_log_fp); barev_log_fp = NULL; }
+}
 
 
 
@@ -1126,6 +1159,8 @@ bonjour_can_receive_file(PurpleConnection *connection, const char *who)
 static gboolean
 plugin_unload(PurplePlugin *plugin)
 {
+  barev_diag_cleanup();
+
   /* These shouldn't happen here because they are allocated in _init() */
 
   g_free(default_firstname);
@@ -1404,6 +1439,8 @@ static void
 init_plugin(PurplePlugin *plugin)
 {
   PurpleAccountOption *option;
+
+  barev_diag_init();
 
   initialize_default_account_values();
 
