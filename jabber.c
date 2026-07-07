@@ -1993,6 +1993,69 @@ static gboolean bonjour_jabber_send_stream_init(BonjourJabberConversation *bconv
   return TRUE;
 }
 
+/* Create a buddy entry from a fully-established incoming stream whose JID did
+ * not match any existing roster entry.  This bootstraps the first-login case
+ * where create_roster ran before the user had added any EDS contacts, so
+ * barev_add_buddy was never called.  The IP is written to the blist node and
+ * the contacts file immediately so it survives an unclean shutdown. */
+static void
+barev_auto_learn_buddy(BonjourJabberConversation *bconv)
+{
+    const char    *jid     = bconv->buddy_name;
+    const char    *ip      = bconv->ip;
+    PurpleAccount *account = bconv->account;
+    PurpleBuddy   *pb;
+    BonjourBuddy  *bb;
+
+    if (!jid || !*jid || !ip || !*ip || !account)
+        return;
+
+    /* Already exists (two simultaneous incoming streams from the same peer). */
+    pb = purple_find_buddy(account, jid);
+    if (pb) {
+        bconv->pb = pb;
+        bb = purple_buddy_get_protocol_data(pb);
+        if (bb && !bb->ips)
+            bb->ips = g_slist_append(NULL, g_strdup(ip));
+        purple_debug_info("bonjour",
+            "auto_learn: buddy '%s' already exists, reusing\n", jid);
+        return;
+    }
+
+    bb = bonjour_buddy_new(jid, account);
+    bb->ips       = g_slist_append(NULL, g_strdup(ip));
+    bb->port_p2pj = BONJOUR_DEFAULT_PORT;
+    bb->status    = g_strdup(BONJOUR_STATUS_ID_AVAILABLE);
+
+    /* Set localpart as the display name (e.g. "inky" from "inky@201:..."). */
+    const char *at = strchr(jid, '@');
+    if (at && at != jid)
+        bb->first = g_strndup(jid, (gsize)(at - jid));
+
+    /* bonjour_buddy_add_to_purple creates the PurpleBuddy in the Barev group,
+     * sets NO_SAVE, attaches protocol_data, and updates the status. */
+    bonjour_buddy_add_to_purple(bb, NULL);
+
+    pb = purple_find_buddy(account, jid);
+    if (!pb) {
+        purple_debug_error("bonjour",
+            "auto_learn: buddy '%s' not found after adding\n", jid);
+        bonjour_buddy_delete(bb);
+        return;
+    }
+
+    /* Clear NO_SAVE and write IP to the blist node so Purple serialises it. */
+    bonjour_buddy_save_to_blist(pb, ip, BONJOUR_DEFAULT_PORT);
+
+    bconv->pb = pb;
+
+    purple_debug_info("bonjour",
+        "auto_learn: created buddy '%s' at %s from incoming stream\n", jid, ip);
+
+    /* Write to the contacts file immediately. */
+    barev_save_persistent_contacts(account);
+}
+
 /* This gets called when we've successfully sent our <stream:stream />
  * AND when we've received a <stream:stream /> */
 void bonjour_jabber_stream_started(BonjourJabberConversation *bconv) {
@@ -2083,11 +2146,22 @@ void bonjour_jabber_stream_started(BonjourJabberConversation *bconv) {
              bconv->recv_stream_start &&
              bconv->pb == NULL) {
 
-    /* The stream is up but we couldn't match the remote peer to any
-     * buddy in our roster.  Send our presence anyway so the remote side
-     * at least knows we are online.  We have already sent our stream
-     * header, so the channel is open; just no roster entry to start
-     * ping or update status from. */
+    /* Try to create a buddy entry from the stream's from-JID so we can
+     * track this peer and persist its address. */
+    if (bconv->buddy_name)
+      barev_auto_learn_buddy(bconv);
+
+    if (bconv->pb) {
+      /* Auto-learn succeeded: treat like the normal connected path. */
+      BonjourBuddy *bb = purple_buddy_get_protocol_data(bconv->pb);
+      if (bb)
+        bonjour_jabber_start_ping(bconv);
+      barev_send_current_presence_to_buddy(bconv->pb);
+      return;
+    }
+
+    /* No buddy_name (peer sent no from= attribute): send bare presence so
+     * the remote side at least knows we are online. */
     const char *from = bconv->account ? bonjour_get_jid(bconv->account) : NULL;
     if (from && *from) {
       xmlnode *presence_node = xmlnode_new("presence");

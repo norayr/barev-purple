@@ -1,3 +1,15 @@
+barev-purple (2.1) unstable; urgency=low
+
+  * adding auto-learn of contacts from incoming streams: when stream_started
+    fires with no matching roster entry but a from-jid is present in the
+    stream header, barev_auto_learn_buddy creates a buddy entry for the peer,
+    clears no_save, and immediately writes the contacts file. the connection
+    then continues on the normal ping+presence path. this bootstraps the case
+    where create_roster ran before the user added any eds contacts, so
+    barev_add_buddy was never called and the contacts file was never created.
+
+ -- Norayr Chilingarian <norayr@arnet.am>  Tue, 07 Jul 2026 23:30:00 +0000
+
 barev-purple (2.0) unstable; urgency=low
 
   * fixing incoming connections from hostname-format buddies being rejected:
