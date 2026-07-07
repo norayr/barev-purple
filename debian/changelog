@@ -1,3 +1,14 @@
+barev-purple (2.8) unstable; urgency=low
+
+  * adding static presence statuses to haze.manager so mission control
+    uses them as fallback when haze returns an empty Presences.Statuses
+    array: available (type 2), away (type 3), busy (type 6),
+    offline (type 1).
+  * fixing haze.manager install path in debian/install: destination
+    must be a relative directory path, not an absolute file path.
+
+ -- Norayr Chilingarian <norayr@arnet.am>  Wed, 08 Jul 2026 13:00:00 +0000
+
 barev-purple (2.7) unstable; urgency=low
 
   * renaming icon sources to barev_black/barev_white for clarity.
