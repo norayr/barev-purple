@@ -1,3 +1,11 @@
+barev-purple (2.7) unstable; urgency=low
+
+  * renaming icon sources to barev_black/barev_white for clarity.
+  * installing white icons on maemo so the letter is visible on the
+    dark hildon theme. adding barev_white.svg for the scalable slot.
+
+ -- Norayr Chilingarian <norayr@arnet.am>  Wed, 08 Jul 2026 11:00:00 +0000
+
 barev-purple (2.6) unstable; urgency=low
 
   * adding haze.manager: declares barev protocol with
