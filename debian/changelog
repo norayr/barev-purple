@@ -1,3 +1,12 @@
+barev-purple (1.7) unstable; urgency=low
+
+  * adding diagnostic file logger: installing a thin purple_debug_ui_ops
+    wrapper that writes every bonjour-category debug message to
+    /tmp/barev-debug.log so connection-matching and stream_started traces
+    can be read directly from the device.
+
+ -- Norayr Chilingarian <norayr@arnet.am>  Mon, 07 Jul 2026 14:42:00 +0000
+
 barev-purple (1.6) unstable; urgency=low
 
   * fixing barev contact field disappearing from osso-abook contact page:
