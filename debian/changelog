@@ -1,3 +1,16 @@
+barev-purple (2.4) unstable; urgency=low
+
+  * removing auto-learn and restoring whitelist-only policy: unknown peers
+    (those whose jid and ip do not match any contact in the list) now receive
+    a not-authorized stream error and are disconnected immediately instead of
+    being silently added to the contact list. contacts must be added
+    explicitly via osso-abook; the osso-abook → eds → mission control →
+    haze → barev_add_buddy chain persists them to ~/.purple/barev-contacts.
+    the contacts file path fix (2.2) ensures this now lands in the right
+    place.
+
+ -- Norayr Chilingarian <norayr@arnet.am>  Wed, 08 Jul 2026 02:00:00 +0000
+
 barev-purple (2.3) unstable; urgency=low
 
   * adding impersonation guard in auto_learn: when the stream from-jid

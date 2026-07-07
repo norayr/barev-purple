@@ -1993,90 +1993,6 @@ static gboolean bonjour_jabber_send_stream_init(BonjourJabberConversation *bconv
   return TRUE;
 }
 
-/* Create a buddy entry from a fully-established incoming stream whose JID did
- * not match any existing roster entry.  This bootstraps the first-login case
- * where create_roster ran before the user had added any EDS contacts, so
- * barev_add_buddy was never called.  The IP is written to the blist node and
- * the contacts file immediately so it survives an unclean shutdown. */
-static void
-barev_auto_learn_buddy(BonjourJabberConversation *bconv)
-{
-    const char    *jid     = bconv->buddy_name;
-    const char    *ip      = bconv->ip;
-    PurpleAccount *account = bconv->account;
-    PurpleBuddy   *pb;
-    BonjourBuddy  *bb;
-
-    if (!jid || !*jid || !ip || !*ip || !account)
-        return;
-
-    /* When the JID encodes an IPv6 address (e.g. "inky@201:b570:..."), verify
-     * that the actual peer address matches.  A peer at 201:evil:... could
-     * otherwise claim from="inky@201:b570:..." and get auto-learned under the
-     * wrong identity, locking the real inky out.  Yggdrasil IPs are
-     * cryptographically bound to public keys, so a mismatch here means the
-     * peer is lying about who they are. */
-    {
-        const char *at = strchr(jid, '@');
-        if (at) {
-            struct in6_addr dummy;
-            if (inet_pton(AF_INET6, at + 1, &dummy) == 1 &&
-                g_ascii_strcasecmp(at + 1, ip) != 0) {
-                purple_debug_warning("bonjour",
-                    "auto_learn: JID '%s' claims IP '%s' but peer is '%s' — "
-                    "rejecting (possible impersonation)\n",
-                    jid, at + 1, ip);
-                return;
-            }
-        }
-    }
-
-    /* Already exists (two simultaneous incoming streams from the same peer). */
-    pb = purple_find_buddy(account, jid);
-    if (pb) {
-        bconv->pb = pb;
-        bb = purple_buddy_get_protocol_data(pb);
-        if (bb && !bb->ips)
-            bb->ips = g_slist_append(NULL, g_strdup(ip));
-        purple_debug_info("bonjour",
-            "auto_learn: buddy '%s' already exists, reusing\n", jid);
-        return;
-    }
-
-    bb = bonjour_buddy_new(jid, account);
-    bb->ips       = g_slist_append(NULL, g_strdup(ip));
-    bb->port_p2pj = BONJOUR_DEFAULT_PORT;
-    bb->status    = g_strdup(BONJOUR_STATUS_ID_AVAILABLE);
-
-    /* Set localpart as the display name (e.g. "inky" from "inky@201:..."). */
-    const char *at = strchr(jid, '@');
-    if (at && at != jid)
-        bb->first = g_strndup(jid, (gsize)(at - jid));
-
-    /* bonjour_buddy_add_to_purple creates the PurpleBuddy in the Barev group,
-     * sets NO_SAVE, attaches protocol_data, and updates the status. */
-    bonjour_buddy_add_to_purple(bb, NULL);
-
-    pb = purple_find_buddy(account, jid);
-    if (!pb) {
-        purple_debug_error("bonjour",
-            "auto_learn: buddy '%s' not found after adding\n", jid);
-        bonjour_buddy_delete(bb);
-        return;
-    }
-
-    /* Clear NO_SAVE and write IP to the blist node so Purple serialises it. */
-    bonjour_buddy_save_to_blist(pb, ip, BONJOUR_DEFAULT_PORT);
-
-    bconv->pb = pb;
-
-    purple_debug_info("bonjour",
-        "auto_learn: created buddy '%s' at %s from incoming stream\n", jid, ip);
-
-    /* Write to the contacts file immediately. */
-    barev_save_persistent_contacts(account);
-}
-
 /* This gets called when we've successfully sent our <stream:stream />
  * AND when we've received a <stream:stream /> */
 void bonjour_jabber_stream_started(BonjourJabberConversation *bconv) {
@@ -2167,47 +2083,25 @@ void bonjour_jabber_stream_started(BonjourJabberConversation *bconv) {
              bconv->recv_stream_start &&
              bconv->pb == NULL) {
 
-    /* Try to create a buddy entry from the stream's from-JID so we can
-     * track this peer and persist its address. */
-    if (bconv->buddy_name)
-      barev_auto_learn_buddy(bconv);
+    /* Peer is not in the whitelist (no buddy matched by JID or IP).
+     * Send a not-authorized stream error and close immediately. */
+    purple_debug_warning("bonjour",
+        "stream_started: rejecting unknown peer %s (not in contact list)\n",
+        bconv->buddy_name ? bconv->buddy_name : bconv->ip ? bconv->ip : "(unknown)");
 
-    if (bconv->pb) {
-      /* Auto-learn succeeded: attach the conversation to the buddy and
-       * remove from pending so it is not closed on timeout. */
-      BonjourBuddy *bb = purple_buddy_get_protocol_data(bconv->pb);
-      if (bb) {
-        bb->conversation = bconv;
-        BonjourJabber *jdata =
-            ((BonjourData *)bconv->account->gc->proto_data)->jabber_data;
-        if (jdata)
-          jdata->pending_conversations =
-              g_slist_remove(jdata->pending_conversations, bconv);
-        bonjour_jabber_start_ping(bconv);
-      }
-      barev_send_current_presence_to_buddy(bconv->pb);
-      return;
-    }
+    static const char reject_xml[] =
+        "<stream:error>"
+        "<not-authorized xmlns='urn:ietf:params:xml:ns:xmpp-streams'/>"
+        "<text xmlns='urn:ietf:params:xml:ns:xmpp-streams'>"
+        "Not in contact list"
+        "</text>"
+        "</stream:error>"
+        "</stream:stream>";
 
-    /* No buddy_name (peer sent no from= attribute): send bare presence so
-     * the remote side at least knows we are online. */
-    const char *from = bconv->account ? bonjour_get_jid(bconv->account) : NULL;
-    if (from && *from) {
-      xmlnode *presence_node = xmlnode_new("presence");
-      xmlnode_set_attrib(presence_node, "from", from);
-      if (bconv->buddy_name)
-        xmlnode_set_attrib(presence_node, "to", bconv->buddy_name);
-      barev_presence_add_avatar_update(presence_node, bconv->account);
-      char *xml = xmlnode_to_str(presence_node, NULL);
-      xmlnode_free(presence_node);
-      if (xml) {
-        purple_debug_info("bonjour",
-            "stream_started: sending presence to unknown peer %s\n",
-            bconv->buddy_name ? bconv->buddy_name : "(null)");
-        send(bconv->socket, xml, strlen(xml), 0);
-        g_free(xml);
-      }
-    }
+    if (bconv->socket >= 0)
+      send(bconv->socket, reject_xml, sizeof(reject_xml) - 1, 0);
+
+    async_bonjour_jabber_close_conversation(bconv);
   }
 }
 
