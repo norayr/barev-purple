@@ -3138,11 +3138,18 @@ bonjour_jabber_send_message(BonjourJabber *jdata, const gchar *to, const gchar *
         return 0;
     }
 
-    /* Contact is known but not yet connected — queue for delivery on reconnect. */
-    if (bb->conversation == NULL) {
+    /* Queue if stream not fully established. Relying on tx_buf here is
+     * unreliable: if the TCP connection attempt fails the bconv is destroyed
+     * and tx_buf goes with it. bb->pending_messages survives bconv
+     * destruction and is drained when the next successful stream fires
+     * the FULLY_SENT block. */
+    if (bb->conversation == NULL ||
+        bb->conversation->connect_data != NULL ||
+        bb->conversation->sent_stream_start != FULLY_SENT ||
+        !bb->conversation->recv_stream_start) {
         bb->pending_messages = g_slist_append(bb->pending_messages, g_strdup(body));
         purple_debug_info("bonjour",
-            "queued message for offline buddy %s (queue depth %u)\n",
+            "queued message for %s (queue depth %u)\n",
             to, g_slist_length(bb->pending_messages));
         PurpleConversation *conv = purple_find_conversation_with_account(
             PURPLE_CONV_TYPE_IM, to, jdata->account);
