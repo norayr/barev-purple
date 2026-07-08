@@ -1,3 +1,10 @@
+barev-purple (2.11) unstable; urgency=low
+
+  * hiding /tmp/barev-debug.log writer behind BAREV_DEBUG compile flag:
+    compiled out by default, re-enable with -DBAREV_DEBUG.
+
+ -- Norayr Chilingarian <norayr@arnet.am>  Wed, 08 Jul 2026 19:00:00 +0000
+
 barev-purple (2.10) unstable; urgency=low
 
   * fixing pending queue to also cover messages sent while a tcp
