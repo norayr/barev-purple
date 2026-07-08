@@ -1,3 +1,14 @@
+barev-purple (2.9) unstable; urgency=low
+
+  * adding pending message queue for offline contacts: messages sent to
+    a known but unreachable contact are queued in memory instead of
+    silently dropped. a notice is written to the conversation window.
+    when the contact connects and the xmpp stream is fully established,
+    the queue is drained in order; send failures leave the remainder
+    for the next reconnect. queued messages are freed on buddy removal.
+
+ -- Norayr Chilingarian <norayr@arnet.am>  Wed, 08 Jul 2026 16:00:00 +0000
+
 barev-purple (2.8) unstable; urgency=low
 
   * adding static presence statuses to haze.manager so mission control
