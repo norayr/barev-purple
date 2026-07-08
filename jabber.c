@@ -2082,6 +2082,27 @@ void bonjour_jabber_stream_started(BonjourJabberConversation *bconv) {
 
     barev_send_current_presence_to_buddy(pb);
 
+    /* Drain queued messages now that the stream is fully established. */
+    if (bb && bb->pending_messages) {
+      BonjourData *bd = bconv->account && bconv->account->gc
+                        ? bconv->account->gc->proto_data : NULL;
+      BonjourJabber *jdata = bd ? bd->jabber_data : NULL;
+      const char *name = purple_buddy_get_name(pb);
+      if (jdata && name) {
+        purple_debug_info("bonjour",
+            "stream_started: draining %u queued messages for %s\n",
+            g_slist_length(bb->pending_messages), name);
+        while (bb->pending_messages) {
+          gchar *queued = bb->pending_messages->data;
+          if (bonjour_jabber_send_message(jdata, name, queued) <= 0)
+            break;
+          bb->pending_messages = g_slist_delete_link(bb->pending_messages,
+                                                     bb->pending_messages);
+          g_free(queued);
+        }
+      }
+    }
+
   } else if (bconv->sent_stream_start == FULLY_SENT &&
              bconv->recv_stream_start &&
              bconv->pb == NULL) {
@@ -3115,6 +3136,21 @@ bonjour_jabber_send_message(BonjourJabber *jdata, const gchar *to, const gchar *
                           "Empty message body for %s – opening/keeping stream only.\n",
                           to);
         return 0;
+    }
+
+    /* Contact is known but not yet connected — queue for delivery on reconnect. */
+    if (bb->conversation == NULL) {
+        bb->pending_messages = g_slist_append(bb->pending_messages, g_strdup(body));
+        purple_debug_info("bonjour",
+            "queued message for offline buddy %s (queue depth %u)\n",
+            to, g_slist_length(bb->pending_messages));
+        PurpleConversation *conv = purple_find_conversation_with_account(
+            PURPLE_CONV_TYPE_IM, to, jdata->account);
+        if (conv)
+            purple_conversation_write(conv, NULL,
+                _("Message queued: will be delivered when the contact connects."),
+                PURPLE_MESSAGE_SYSTEM | PURPLE_MESSAGE_NO_LOG, time(NULL));
+        return 1;
     }
 
     purple_markup_html_to_xhtml(body, &xhtml, &message);

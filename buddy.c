@@ -351,6 +351,12 @@ bonjour_buddy_delete(BonjourBuddy *buddy)
   g_free(buddy->node);
   g_free(buddy->ver);
 
+  while (buddy->pending_messages) {
+    g_free(buddy->pending_messages->data);
+    buddy->pending_messages = g_slist_delete_link(buddy->pending_messages,
+                                                  buddy->pending_messages);
+  }
+
   bonjour_jabber_close_conversation(buddy->conversation);
   buddy->conversation = NULL;
 
