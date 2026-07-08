@@ -1,3 +1,16 @@
+barev-purple (2.10) unstable; urgency=low
+
+  * fixing pending queue to also cover messages sent while a tcp
+    connection attempt is in progress: _find_or_start_conversation sets
+    bb->conversation immediately on connect attempt, so the old
+    conversation == NULL check was insufficient. messages were passed to
+    _send_data which buffered them in the bconv tx_buf; when the
+    connection failed the bconv was destroyed and tx_buf lost. now
+    queuing to bb->pending_messages whenever connect_data is set or
+    the stream is not fully established.
+
+ -- Norayr Chilingarian <norayr@arnet.am>  Wed, 08 Jul 2026 18:00:00 +0000
+
 barev-purple (2.9) unstable; urgency=low
 
   * adding pending message queue for offline contacts: messages sent to
