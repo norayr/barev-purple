@@ -45,6 +45,7 @@ typedef struct _BonjourBuddy
 	gchar *ver;
 
 	BonjourJabberConversation *conversation;
+	GSList *pending_messages;
 
 	gpointer mdns_impl_data;
 } BonjourBuddy;
