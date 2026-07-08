@@ -32,7 +32,7 @@
 #include "proxy.h"
 #include "ft.h"
 #include "buddy.h"
-#include "bonjour.h"
+#include "barev.h"
 #include "bonjour_ft.h"
 #include "cipher.h"
 
@@ -63,7 +63,7 @@ xep_ft_si_reject(BonjourData *bd, const char *id, const char *to, const char *er
   g_return_if_fail(error_type != NULL);
 
   if(!to || !id) {
-    purple_debug_info("bonjour", "xep file transfer stream initialization error.\n");
+    purple_debug_info("barev", "xep file transfer stream initialization error.\n");
     return;
   }
 
@@ -93,7 +93,7 @@ xep_ft_si_reject(BonjourData *bd, const char *id, const char *to, const char *er
 
 static void bonjour_xfer_cancel_send(PurpleXfer *xfer)
 {
-  purple_debug_info("bonjour", "Bonjour-xfer-cancel-send.\n");
+  purple_debug_info("barev", "Bonjour-xfer-cancel-send.\n");
   bonjour_free_xfer(xfer);
 }
 
@@ -101,7 +101,7 @@ static void bonjour_xfer_request_denied(PurpleXfer *xfer)
 {
   XepXfer *xf = xfer->data;
 
-  purple_debug_info("bonjour", "Bonjour-xfer-request-denied.\n");
+  purple_debug_info("barev", "Bonjour-xfer-request-denied.\n");
 
   if(xf)
     xep_ft_si_reject(xf->data, xf->sid, xfer->who, "403", "cancel");
@@ -111,7 +111,7 @@ static void bonjour_xfer_request_denied(PurpleXfer *xfer)
 
 static void bonjour_xfer_cancel_recv(PurpleXfer *xfer)
 {
-  purple_debug_info("bonjour", "Bonjour-xfer-cancel-recv.\n");
+  purple_debug_info("barev", "Bonjour-xfer-cancel-recv.\n");
   bonjour_free_xfer(xfer);
 }
 
@@ -130,7 +130,7 @@ _wait_for_socket_close(gpointer data, gint source, PurpleInputCondition cond)
   ret = recv(source, buf, 1, 0);
 
   if (ret == 0 || (ret == -1 && !(errno == EAGAIN || errno == EWOULDBLOCK))) {
-    purple_debug_info("bonjour", "Client completed receiving; closing server socket.\n");
+    purple_debug_info("barev", "Client completed receiving; closing server socket.\n");
     purple_input_remove(sc->handle);
     close(sc->fd);
     g_free(sc);
@@ -139,7 +139,7 @@ _wait_for_socket_close(gpointer data, gint source, PurpleInputCondition cond)
 
 static void bonjour_xfer_end(PurpleXfer *xfer)
 {
-  purple_debug_info("bonjour", "Bonjour-xfer-end.\n");
+  purple_debug_info("barev", "Bonjour-xfer-end.\n");
 
   /* We can't allow the server side to close the connection until the client is complete,
    * otherwise there is a RST resulting in an error on the client side */
@@ -164,7 +164,7 @@ bonjour_si_xfer_find(BonjourData *bd, const char *sid, const char *from)
   if(!sid || !from || !bd)
     return NULL;
 
-  purple_debug_info("bonjour", "Look for sid=%s from=%s xferlists.\n",
+  purple_debug_info("barev", "Look for sid=%s from=%s xferlists.\n",
         sid, from);
 
   for(xfers = bd->xfer_lists; xfers; xfers = xfers->next) {
@@ -179,7 +179,7 @@ bonjour_si_xfer_find(BonjourData *bd, const char *sid, const char *from)
       return xfer;
   }
 
-  purple_debug_info("bonjour", "Look for xfer list fail\n");
+  purple_debug_info("barev", "Look for xfer list fail\n");
 
   return NULL;
 }
@@ -200,7 +200,7 @@ xep_ft_si_offer(PurpleXfer *xfer, const gchar *to)
   if(!bd)
     return;
 
-  purple_debug_info("bonjour", "xep file transfer stream initialization offer-id=%d.\n", next_id);
+  purple_debug_info("barev", "xep file transfer stream initialization offer-id=%d.\n", next_id);
 
   /* Assign stream id. */
   g_free(xf->iq_id);
@@ -264,7 +264,7 @@ xep_ft_si_result(PurpleXfer *xfer, char *to)
 
   bd = xf->data;
 
-  purple_debug_info("bonjour", "xep file transfer stream initialization result.\n");
+  purple_debug_info("barev", "xep file transfer stream initialization result.\n");
   iq = xep_iq_new(bd, XEP_IQ_RESULT, to, bonjour_get_jid(bd->jabber_data->account), xf->iq_id);
   if(iq == NULL)
     return;
@@ -314,18 +314,18 @@ bonjour_free_xfer(PurpleXfer *xfer)
   XepXfer *xf;
 
   if(xfer == NULL) {
-    purple_debug_info("bonjour", "bonjour-free-xfer-null.\n");
+    purple_debug_info("barev", "bonjour-free-xfer-null.\n");
     return;
   }
 
-  purple_debug_info("bonjour", "bonjour-free-xfer-%p.\n", xfer);
+  purple_debug_info("barev", "bonjour-free-xfer-%p.\n", xfer);
 
   xf = (XepXfer*)xfer->data;
   if(xf != NULL) {
     BonjourData *bd = (BonjourData*)xf->data;
     if(bd != NULL) {
       bd->xfer_lists = g_slist_remove(bd->xfer_lists, xfer);
-      purple_debug_info("bonjour", "B free xfer from lists(%p).\n", bd->xfer_lists);
+      purple_debug_info("barev", "B free xfer from lists(%p).\n", bd->xfer_lists);
     }
     if (xf->proxy_connection != NULL)
       purple_proxy_connect_cancel(xf->proxy_connection);
@@ -345,7 +345,7 @@ bonjour_free_xfer(PurpleXfer *xfer)
     xfer->data = NULL;
   }
 
-  purple_debug_info("bonjour", "Need close socket=%d.\n", xfer->fd);
+  purple_debug_info("barev", "Need close socket=%d.\n", xfer->fd);
 }
 
 PurpleXfer *
@@ -358,7 +358,7 @@ bonjour_new_xfer(PurpleConnection *gc, const char *who)
   if(who == NULL || gc == NULL)
     return NULL;
 
-  purple_debug_info("bonjour", "Bonjour-new-xfer to %s.\n", who);
+  purple_debug_info("barev", "Bonjour-new-xfer to %s.\n", who);
   bd = (BonjourData*) gc->proto_data;
   if(bd == NULL)
     return NULL;
@@ -368,7 +368,7 @@ bonjour_new_xfer(PurpleConnection *gc, const char *who)
   xfer->data = xep_xfer = g_new0(XepXfer, 1);
   xep_xfer->data = bd;
 
-  purple_debug_info("bonjour", "Bonjour-new-xfer bd=%p data=%p.\n", bd, xep_xfer->data);
+  purple_debug_info("barev", "Bonjour-new-xfer bd=%p data=%p.\n", bd, xep_xfer->data);
 
   /* We don't support IBB yet */
   /*xep_xfer->mode = XEP_BYTESTREAMS | XEP_IBB;*/
@@ -392,7 +392,7 @@ bonjour_send_file(PurpleConnection *gc, const char *who, const char *file)
   g_return_if_fail(gc != NULL);
   g_return_if_fail(who != NULL);
 
-  purple_debug_info("bonjour", "Bonjour-send-file to=%s.\n", who);
+  purple_debug_info("barev", "Bonjour-send-file to=%s.\n", who);
 
   xfer = bonjour_new_xfer(gc, who);
 
@@ -414,7 +414,7 @@ bonjour_xfer_init(PurpleXfer *xfer)
   if(xf == NULL)
     return;
 
-  purple_debug_info("bonjour", "Bonjour-xfer-init.\n");
+  purple_debug_info("barev", "Bonjour-xfer-init.\n");
 
   buddy = purple_find_buddy(xfer->account, xfer->who);
   /* this buddy is offline. */
@@ -426,12 +426,12 @@ bonjour_xfer_init(PurpleXfer *xfer)
     xf->buddy_ip = g_strdup(bb->ips->data);
   if (purple_xfer_get_type(xfer) == PURPLE_XFER_SEND) {
     /* initiate file transfer, send SI offer. */
-    purple_debug_info("bonjour", "Bonjour xfer type is PURPLE_XFER_SEND.\n");
+    purple_debug_info("barev", "Bonjour xfer type is PURPLE_XFER_SEND.\n");
     xep_ft_si_offer(xfer, xfer->who);
   } else {
     /* accept file transfer request, send SI result. */
     xep_ft_si_result(xfer, xfer->who);
-    purple_debug_info("bonjour", "Bonjour xfer type is PURPLE_XFER_RECEIVE.\n");
+    purple_debug_info("barev", "Bonjour xfer type is PURPLE_XFER_RECEIVE.\n");
   }
 }
 
@@ -451,7 +451,7 @@ xep_si_parse(PurpleConnection *pc, xmlnode *packet, PurpleBuddy *pb)
   if(bd == NULL)
     return;
 
-  purple_debug_info("bonjour", "xep-si-parse.\n");
+  purple_debug_info("barev", "xep-si-parse.\n");
 
   name = purple_buddy_get_name(pb);
 
@@ -466,7 +466,7 @@ xep_si_parse(PurpleConnection *pc, xmlnode *packet, PurpleBuddy *pb)
 
     si = xmlnode_get_child(packet, "si");
 
-    purple_debug_info("bonjour", "si offer Message type - SET.\n");
+    purple_debug_info("barev", "si offer Message type - SET.\n");
     if (si) {
       const char *profile;
 
@@ -498,33 +498,33 @@ xep_si_parse(PurpleConnection *pc, xmlnode *packet, PurpleBuddy *pb)
     if (!parsed_receive) {
       BonjourData *bd = purple_connection_get_protocol_data(pc);
 
-      purple_debug_info("bonjour", "rejecting unrecognized si SET offer.\n");
+      purple_debug_info("barev", "rejecting unrecognized si SET offer.\n");
       xep_ft_si_reject(bd, id, name, "403", "cancel");
       /*TODO: Send Cancel (501) */
     }
   } else if(purple_strequal(type, "result")) {
-    purple_debug_info("bonjour", "si offer Message type - RESULT.\n");
+    purple_debug_info("barev", "si offer Message type - RESULT.\n");
 
     xfer = bonjour_si_xfer_find(bd, id, name);
 
     if(xfer == NULL) {
       BonjourData *bd = purple_connection_get_protocol_data(pc);
-      purple_debug_info("bonjour", "xfer find fail.\n");
+      purple_debug_info("barev", "xfer find fail.\n");
       xep_ft_si_reject(bd, id, name, "403", "cancel");
     } else
       bonjour_bytestreams_init(xfer);
 
   } else if(purple_strequal(type, "error")) {
-    purple_debug_info("bonjour", "si offer Message type - ERROR.\n");
+    purple_debug_info("barev", "si offer Message type - ERROR.\n");
 
     xfer = bonjour_si_xfer_find(bd, id, name);
 
     if(xfer == NULL)
-      purple_debug_info("bonjour", "xfer find fail.\n");
+      purple_debug_info("barev", "xfer find fail.\n");
     else
       purple_xfer_cancel_remote(xfer);
   } else
-    purple_debug_info("bonjour", "si offer Message type - Unknown-%s.\n", type);
+    purple_debug_info("barev", "si offer Message type - Unknown-%s.\n", type);
 }
 
 /**
@@ -649,14 +649,14 @@ add_ipv6_link_local_ifaces(xmlnode *cur_streamhost, const char *host,
   for (ip_elem = bb->ips;
        (ip_elem = g_slist_find_custom(ip_elem, host, (GCompareFunc)&xep_addr_differ));
        ip_elem = ip_elem->next) {
-    purple_debug_info("bonjour", "Inserting an xmlnode twin copy for %s with new host address %s\n",
+    purple_debug_info("barev", "Inserting an xmlnode twin copy for %s with new host address %s\n",
           host, (char*)ip_elem->data);
     new_streamhost = xmlnode_insert_twin_copy(cur_streamhost);
     xmlnode_set_attrib(new_streamhost, "host", ip_elem->data);
   }
 
   if (!new_streamhost)
-    purple_debug_info("bonjour", "No interface for this IPv6 link local address found: %s\n",
+    purple_debug_info("barev", "No interface for this IPv6 link local address found: %s\n",
           host);
 
   return TRUE;
@@ -677,7 +677,7 @@ __xep_bytestreams_parse(PurpleBuddy *pb, PurpleXfer *xfer, xmlnode *streamhost,
        !(host = xmlnode_get_attrib(streamhost, "host")) ||
        !(port = xmlnode_get_attrib(streamhost, "port")) ||
        !(portnum = atoi(port))) {
-      purple_debug_info("bonjour", "bytestream offer Message parse error.\n");
+      purple_debug_info("barev", "bytestream offer Message parse error.\n");
       continue;
     }
 
@@ -697,7 +697,7 @@ __xep_bytestreams_parse(PurpleBuddy *pb, PurpleXfer *xfer, xmlnode *streamhost,
     xf->proxy_port = portnum;
     xf->streamhost = streamhost;
     xf->pb = pb;
-    purple_debug_info("bonjour", "bytestream offer parse"
+    purple_debug_info("barev", "bytestream offer parse"
           "jid=%s host=%s port=%d.\n", jid, host, portnum);
     bonjour_bytestreams_connect(xfer);
     return TRUE;
@@ -722,7 +722,7 @@ xep_bytestreams_parse(PurpleConnection *pc, xmlnode *packet, PurpleBuddy *pb)
   if(bd == NULL)
     return;
 
-  purple_debug_info("bonjour", "xep-bytestreams-parse.\n");
+  purple_debug_info("barev", "xep-bytestreams-parse.\n");
 
   type = xmlnode_get_attrib(packet, "type");
   from = purple_buddy_get_name(pb);
@@ -735,11 +735,11 @@ xep_bytestreams_parse(PurpleConnection *pc, xmlnode *packet, PurpleBuddy *pb)
     return;
 
   if(!purple_strequal(type, "set")) {
-    purple_debug_info("bonjour", "bytestream offer Message type - Unknown-%s.\n", type);
+    purple_debug_info("barev", "bytestream offer Message type - Unknown-%s.\n", type);
     return;
   }
 
-  purple_debug_info("bonjour", "bytestream offer Message type - SET.\n");
+  purple_debug_info("barev", "bytestream offer Message type - SET.\n");
 
   iq_id = xmlnode_get_attrib(packet, "id");
 
@@ -750,7 +750,7 @@ xep_bytestreams_parse(PurpleConnection *pc, xmlnode *packet, PurpleBuddy *pb)
   if(xfer && streamhost && __xep_bytestreams_parse(pb, xfer, streamhost, iq_id))
     return; /* success */
 
-  purple_debug_error("bonjour", "Didn't find an acceptable streamhost.\n");
+  purple_debug_error("barev", "Didn't find an acceptable streamhost.\n");
 
   if (iq_id && xfer != NULL)
     xep_ft_si_reject(bd, iq_id, xfer->who, "404", "cancel");
@@ -771,7 +771,7 @@ bonjour_xfer_receive(PurpleConnection *pc, const char *id, const char *sid, cons
   if(bd == NULL)
     return;
 
-  purple_debug_info("bonjour", "bonjour-xfer-receive.\n");
+  purple_debug_info("barev", "bonjour-xfer-receive.\n");
 
   /* Build the file transfer handle */
   xfer = purple_xfer_new(pc->account, PURPLE_XFER_RECEIVE, from);
@@ -804,7 +804,7 @@ bonjour_sock5_request_cb(gpointer data, gint source, PurpleInputCondition cond)
   if(xf == NULL)
     return;
 
-  purple_debug_info("bonjour", "bonjour_sock5_request_cb - req_state = 0x%x\n", xf->sock5_req_state);
+  purple_debug_info("barev", "bonjour_sock5_request_cb - req_state = 0x%x\n", xf->sock5_req_state);
 
   switch(xf->sock5_req_state){
   case 0x00:
@@ -813,7 +813,7 @@ bonjour_sock5_request_cb(gpointer data, gint source, PurpleInputCondition cond)
 
     } else if(acceptfd == -1) {
       /* This should cancel the ft */
-      purple_debug_error("bonjour", "Error accepting incoming SOCKS5 connection. (%d)\n", errno);
+      purple_debug_error("barev", "Error accepting incoming SOCKS5 connection. (%d)\n", errno);
 
       purple_input_remove(xfer->watcher);
       xfer->watcher = 0;
@@ -821,7 +821,7 @@ bonjour_sock5_request_cb(gpointer data, gint source, PurpleInputCondition cond)
       purple_xfer_cancel_remote(xfer);
       return;
     } else {
-      purple_debug_info("bonjour", "Accepted SOCKS5 ft connection - fd=%d\n", acceptfd);
+      purple_debug_info("barev", "Accepted SOCKS5 ft connection - fd=%d\n", acceptfd);
 
       _purple_network_set_common_socket_flags(acceptfd);
       purple_input_remove(xfer->watcher);
@@ -927,7 +927,7 @@ bonjour_bytestreams_listen(int sock, gpointer data)
     GSList *local_ips, *l;
     BonjourData *bd;
 
-    purple_debug_info("bonjour", "Bonjour-bytestreams-listen. sock=%d.\n", sock);
+    purple_debug_info("barev", "Bonjour-bytestreams-listen. sock=%d.\n", sock);
     if (sock < 0 || xfer == NULL) {
         /*purple_xfer_cancel_local(xfer);*/
         return;
@@ -956,14 +956,14 @@ bonjour_bytestreams_listen(int sock, gpointer data)
     port = g_strdup_printf("%hu", (guint16)purple_xfer_get_local_port(xfer));
 
     if (!local_ips) {
-        purple_debug_warning("bonjour",
+        purple_debug_warning("barev",
                              "bytestreams-listen: no local IPs found, "
                              "not advertising any streamhost\n");
     } else {
         for (l = local_ips; l; l = l->next) {
             const char *ip = l->data;
 
-            purple_debug_info("bonjour",
+            purple_debug_info("barev",
                               "bytestream offer: advertising host=%s port=%s\n",
                               ip, port);
 
@@ -995,17 +995,17 @@ bonjour_bytestreams_init(PurpleXfer *xfer)
     if (xfer == NULL)
         return;
 
-    purple_debug_info("bonjour", "Bonjour-bytestreams-init (Barev IPv6).\n");
+    purple_debug_info("barev", "Bonjour-bytestreams-init (Barev IPv6).\n");
 
     xf = xfer->data;
     if (xf == NULL) {
-        purple_debug_error("bonjour", "Barev: bytestreams_init called with NULL XepXfer\n");
+        purple_debug_error("barev", "Barev: bytestreams_init called with NULL XepXfer\n");
         return;
     }
 
     sock = socket(AF_INET6, SOCK_STREAM, 0);
     if (sock < 0) {
-        purple_debug_error("bonjour", "Barev: failed to create IPv6 socket for bytestream: %s\n",
+        purple_debug_error("barev", "Barev: failed to create IPv6 socket for bytestream: %s\n",
                            g_strerror(errno));
         purple_xfer_cancel_local(xfer);
         return;
@@ -1017,7 +1017,7 @@ bonjour_bytestreams_init(PurpleXfer *xfer)
     //addr6.sin6_port = 0;             /* let kernel choose port */
 
     //if (bind(sock, (struct sockaddr *)&addr6, sizeof(addr6)) < 0) {
-    //    purple_debug_error("bonjour", "Barev: bind() failed for bytestream: %s\n",
+    //    purple_debug_error("barev", "Barev: bind() failed for bytestream: %s\n",
     //                       g_strerror(errno));
     //    close(sock);
     //    purple_xfer_cancel_local(xfer);
@@ -1038,7 +1038,7 @@ bonjour_bytestreams_init(PurpleXfer *xfer)
     if (!bound) {
         addr6.sin6_port = 0; /* kernel chooses */
         if (bind(sock, (struct sockaddr *)&addr6, sizeof(addr6)) < 0) {
-            purple_debug_error("bonjour", "Barev: bind() failed for bytestream: %s\n",
+            purple_debug_error("barev", "Barev: bind() failed for bytestream: %s\n",
                                g_strerror(errno));
             close(sock);
             purple_xfer_cancel_local(xfer);
@@ -1047,7 +1047,7 @@ bonjour_bytestreams_init(PurpleXfer *xfer)
     }
 
     if (listen(sock, 1) < 0) {
-        purple_debug_error("bonjour", "Barev: listen() failed for bytestream: %s\n",
+        purple_debug_error("barev", "Barev: listen() failed for bytestream: %s\n",
                            g_strerror(errno));
         close(sock);
         purple_xfer_cancel_local(xfer);
@@ -1056,7 +1056,7 @@ bonjour_bytestreams_init(PurpleXfer *xfer)
 
     addrlen = sizeof(addr6);
     if (getsockname(sock, (struct sockaddr *)&addr6, &addrlen) < 0) {
-        purple_debug_error("bonjour", "Barev: getsockname() failed for bytestream: %s\n",
+        purple_debug_error("barev", "Barev: getsockname() failed for bytestream: %s\n",
                            g_strerror(errno));
         close(sock);
         purple_xfer_cancel_local(xfer);
@@ -1067,7 +1067,7 @@ bonjour_bytestreams_init(PurpleXfer *xfer)
     xfer->local_port = port;
     xf->listen_data = NULL;  /* we no longer use purple_network_listen_range */
 
-    purple_debug_info("bonjour",
+    purple_debug_info("barev",
                       "Barev: listening for bytestream on IPv6 [::]:%hu (sock=%d)\n",
                       port, sock);
 
@@ -1092,7 +1092,7 @@ bonjour_bytestreams_connect_cb(gpointer data, gint source, const gchar *error_me
   xf->proxy_connection = NULL;
 
   if(source < 0) {
-    purple_debug_error("bonjour", "Error connecting via SOCKS5 to %s - %s\n",
+    purple_debug_error("barev", "Error connecting via SOCKS5 to %s - %s\n",
       xf->proxy_host, error_message ? error_message : "(null)");
 
     tmp_node = xmlnode_get_next_twin(xf->streamhost);
@@ -1106,7 +1106,7 @@ bonjour_bytestreams_connect_cb(gpointer data, gint source, const gchar *error_me
     return;
   }
 
-  purple_debug_info("bonjour", "Connected successfully via SOCKS5, starting transfer.\n");
+  purple_debug_info("barev", "Connected successfully via SOCKS5, starting transfer.\n");
 
   bd = xf->data;
 
@@ -1138,7 +1138,7 @@ bonjour_bytestreams_connect(PurpleXfer *xfer)
   if(xfer == NULL)
     return;
 
-  purple_debug_info("bonjour", "bonjour-bytestreams-connect.\n");
+  purple_debug_info("barev", "bonjour-bytestreams-connect.\n");
 
   xf = (XepXfer*)xfer->data;
   if(!xf)

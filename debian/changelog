@@ -1,3 +1,12 @@
+barev-purple (2.12) unstable; urgency=low
+
+  * renaming bonjour.c to barev.c and bonjour.h to barev.h: replacing
+    all "bonjour" debug category strings with "barev" across barev.c,
+    buddy.c, jabber.c, parser.c, bonjour_ft.c. updating strncmp in
+    BAREV_DEBUG block to match new category name.
+
+ -- Norayr Chilingarian <norayr@arnet.am>  Wed, 08 Jul 2026 21:00:00 +0000
+
 barev-purple (2.11) unstable; urgency=low
 
   * hiding /tmp/barev-debug.log writer behind BAREV_DEBUG compile flag:

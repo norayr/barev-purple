@@ -85,7 +85,7 @@ parse_from_attrib_and_find_buddy(BonjourJabberConversation *bconv, int nb_attrib
       int len = attributes[i+4] - attributes[i+3];
       char *from_jid = g_strndup((char *)attributes[i+3], len);
 
-      purple_debug_info("bonjour",
+      purple_debug_info("barev",
           "parse_from: from_jid='%s' bconv->pb=%s bconv->buddy_name='%s' ip='%s'\n",
           from_jid,
           bconv->pb ? purple_buddy_get_name(bconv->pb) : "(null)",
@@ -113,7 +113,7 @@ parse_from_attrib_and_find_buddy(BonjourJabberConversation *bconv, int nb_attrib
 
                           /* If this conversation is an outgoing connection, enforce roster port too. */
                           if (bconv->remote_port > 0 && claimed_bb->port_p2pj > 0 && claimed_bb->port_p2pj != bconv->remote_port) {
-                              purple_debug_warning("bonjour",
+                              purple_debug_warning("barev",
                                   "Port mismatch for claimed JID %s: roster port %d, connected port %d (not rebinding)\n",
                                   from_jid, claimed_bb->port_p2pj, bconv->remote_port);
                               /* keep current buddy */
@@ -121,7 +121,7 @@ parse_from_attrib_and_find_buddy(BonjourJabberConversation *bconv, int nb_attrib
                           else
                           {
 
-                            purple_debug_info("bonjour",
+                            purple_debug_info("barev",
                               "Stream 'from=%s' differs from connected buddy '%s', "
                               "but claimed JID is a known buddy for IP %s. Rebinding to claimed JID.\n",
                               from_jid, current_buddy_name, bconv->ip);
@@ -158,7 +158,7 @@ parse_from_attrib_and_find_buddy(BonjourJabberConversation *bconv, int nb_attrib
 
                   if (current_buddy_ip_matches) {
                       /* Current buddy is correct by IP. Don't switch! Remote is lying about JID. */
-                      //purple_debug_warning("bonjour",
+                      //purple_debug_warning("barev",
                       //    "Stream 'from=%s' doesn't match connected buddy '%s', "
                       //    "but connection IP %s matches current buddy's IP list. "
                       //    "Keeping current buddy (remote JID claim rejected).\n",
@@ -171,7 +171,7 @@ parse_from_attrib_and_find_buddy(BonjourJabberConversation *bconv, int nb_attrib
                        * prefer the claimed JID. Otherwise keep the current buddy as a spoofing guard.
                        */
                       if (!buddy_name_allows_ip(bconv->account, from_jid, bconv->ip)) {
-                          purple_debug_warning("bonjour",
+                          purple_debug_warning("barev",
                               "Stream 'from=%s' doesn't match connected buddy '%s', "
                               "and connection IP %s matches current buddy's IP list. "
                               "Claimed JID is not a known buddy for this IP; keeping current buddy.\n",
@@ -180,7 +180,7 @@ parse_from_attrib_and_find_buddy(BonjourJabberConversation *bconv, int nb_attrib
                           return TRUE;
                       }
 
-                      purple_debug_info("bonjour",
+                      purple_debug_info("barev",
                           "Stream 'from=%s' doesn't match connected buddy '%s', "
                           "but both buddies allow IP %s. Switching to claimed JID (Barev multi-identity).\n",
                           from_jid, current_buddy_name, bconv->ip);
@@ -189,7 +189,7 @@ parse_from_attrib_and_find_buddy(BonjourJabberConversation *bconv, int nb_attrib
                   }
               }
 
-              purple_debug_warning("bonjour",
+              purple_debug_warning("barev",
                   "Stream 'from=%s' doesn't match connected buddy '%s'. "
                   "Trying to find correct buddy.\n",
                   from_jid, current_buddy_name);
@@ -201,7 +201,7 @@ parse_from_attrib_and_find_buddy(BonjourJabberConversation *bconv, int nb_attrib
               bconv->pb = NULL;
           } else {
               /* "from" matches our current buddy, all good */
-              purple_debug_info("bonjour",
+              purple_debug_info("barev",
                   "Stream 'from=%s' matches current buddy.\n", from_jid);
               g_free(from_jid);
               return TRUE;
@@ -213,7 +213,7 @@ parse_from_attrib_and_find_buddy(BonjourJabberConversation *bconv, int nb_attrib
       bconv->buddy_name = from_jid;
       bonjour_jabber_conv_match_by_name(bconv);
 
-      purple_debug_info("bonjour",
+      purple_debug_info("barev",
           "parse_from: after conv_match_by_name for '%s': pb=%s\n",
           from_jid,
           bconv->pb ? purple_buddy_get_name(bconv->pb) : "(null)");
@@ -249,7 +249,7 @@ bonjour_parser_element_start_libxml(void *user_data,
       parse_from_attrib_and_find_buddy(bconv, nb_attributes, attributes);
 
       if (!bconv->closing && bconv->close_timeout == 0) {
-        purple_debug_info("bonjour",
+        purple_debug_info("barev",
             "parser: calling stream_started after <stream> — pb=%s sent=%d\n",
             bconv->pb ? purple_buddy_get_name(bconv->pb) : "(null)",
             bconv->sent_stream_start);
@@ -468,6 +468,6 @@ void bonjour_parser_process(BonjourJabberConversation *bconv, const char *buf, i
     xmlParseChunk(bconv->context, "", 0, 0);
   } else if (xmlParseChunk(bconv->context, buf, len, 0) < 0)
     /* TODO: What should we do here - I assume we should display an error or something (maybe just print something to the conv?) */
-    purple_debug_error("bonjour", "Error parsing xml.\n");
+    purple_debug_error("barev", "Error parsing xml.\n");
 
 }

@@ -29,7 +29,7 @@ LDLIBS  = $(PURPLE_LIBS) $(GLIB_LIBS) $(LIBXML_LIBS) $(AVAHI_LIBS)
 PLUGIN  = libbarev.so
 
 SRCS = \
-  bonjour.c \
+  barev.c \
   buddy.c \
   jabber.c \
   parser.c \
