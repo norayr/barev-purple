@@ -37,7 +37,7 @@
 #include <util.h>
 #include <version.h>
 
-#include "bonjour.h"
+#include "barev.h"
 #include "jabber.h"
 #include "buddy.h"
 #include "bonjour_ft.h"
@@ -61,7 +61,7 @@ static PurpleDebugUiOps  *barev_orig_ops = NULL;
 static void
 barev_diag_print(PurpleDebugLevel level, const char *cat, const char *msg)
 {
-    if (barev_log_fp && cat && strncmp(cat, "bonjour", 7) == 0) {
+    if (barev_log_fp && cat && strncmp(cat, "barev", 7) == 0) {
         fputs(msg, barev_log_fp);
         fflush(barev_log_fp);
     }
@@ -183,13 +183,13 @@ parse_barev_buddy_string(const char *buddy_str)
   char *percent_pos;
 
   if (!buddy_str || strlen(buddy_str) == 0) {
-    purple_debug_error("bonjour", "Empty buddy string\n");
+    purple_debug_error("barev", "Empty buddy string\n");
     return NULL;
   }
 
   /* Check for minimum length - at least "a@b" */
   if (strlen(buddy_str) < 3) {
-    purple_debug_error("bonjour", "Buddy string too short: '%s'\n", buddy_str);
+    purple_debug_error("barev", "Buddy string too short: '%s'\n", buddy_str);
     return NULL;
   }
 
@@ -199,7 +199,7 @@ parse_barev_buddy_string(const char *buddy_str)
   /* Look for @ separator - REQUIRED for Barev buddies */
   at_sign = strchr(str_copy, '@');
   if (!at_sign) {
-    purple_debug_error("bonjour", "Invalid Barev buddy format '%s' - must be nick@ipv6\n", buddy_str);
+    purple_debug_error("barev", "Invalid Barev buddy format '%s' - must be nick@ipv6\n", buddy_str);
     g_free(info);
     g_free(str_copy);
     return NULL;
@@ -207,7 +207,7 @@ parse_barev_buddy_string(const char *buddy_str)
 
   /* Check that @ is not at the beginning or end */
   if (at_sign == str_copy || *(at_sign + 1) == '\0') {
-    purple_debug_error("bonjour", "Invalid Barev buddy format '%s' - @ at wrong position\n", buddy_str);
+    purple_debug_error("barev", "Invalid Barev buddy format '%s' - @ at wrong position\n", buddy_str);
     g_free(info);
     g_free(str_copy);
     return NULL;
@@ -219,7 +219,7 @@ parse_barev_buddy_string(const char *buddy_str)
 
   /* Validate nick is not empty */
   if (!info->nick || strlen(info->nick) == 0) {
-    purple_debug_error("bonjour", "Invalid Barev buddy format '%s' - empty nickname\n", buddy_str);
+    purple_debug_error("barev", "Invalid Barev buddy format '%s' - empty nickname\n", buddy_str);
     g_free(info->nick);
     g_free(info);
     g_free(str_copy);
@@ -233,7 +233,7 @@ parse_barev_buddy_string(const char *buddy_str)
 
   /* Validate IPv6 is not empty */
   if (!info->ipv6_address || strlen(info->ipv6_address) == 0) {
-    purple_debug_error("bonjour", "Invalid Barev buddy format '%s' - empty IPv6 address\n", buddy_str);
+    purple_debug_error("barev", "Invalid Barev buddy format '%s' - empty IPv6 address\n", buddy_str);
     g_free(info->nick);
     g_free(info->ipv6_address);
     g_free(info);
@@ -275,7 +275,7 @@ parse_barev_buddy_string(const char *buddy_str)
     }
   }
 
-  purple_debug_info("bonjour", "Parsed Barev buddy: nick=%s, ipv6=%s, port=%d\n",
+  purple_debug_info("barev", "Parsed Barev buddy: nick=%s, ipv6=%s, port=%d\n",
     info->nick, info->ipv6_address, info->port);
 
   g_free(str_copy);
@@ -298,7 +298,7 @@ barev_auto_connect_timer(gpointer data)
   if (!PURPLE_CONNECTION_IS_CONNECTED(gc) || !bd || !bd->jabber_data)
     return FALSE;
 
-  purple_debug_info("bonjour", "Barev: auto-connecting to buddies\n");
+  purple_debug_info("barev", "Barev: auto-connecting to buddies\n");
 
   buddies = purple_find_buddies(gc->account, NULL);
   seen_buddies = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
@@ -313,7 +313,7 @@ barev_auto_connect_timer(gpointer data)
      * callbacks for the same JID.  Use the same canonical PurpleBuddy that
      * purple_find_buddy() will later return to the connection callbacks. */
     if (!who) {
-      purple_debug_warning("bonjour",
+      purple_debug_warning("barev",
                            "Barev: skipping buddy entry with no name\n");
       continue;
     }
@@ -321,7 +321,7 @@ barev_auto_connect_timer(gpointer data)
     canonical = purple_find_buddy(gc->account, who);
     if ((canonical && canonical != pb) ||
         g_hash_table_lookup(seen_buddies, who) != NULL) {
-      purple_debug_warning("bonjour",
+      purple_debug_warning("barev",
                            "Barev: skipping duplicate buddy entry %s\n", who);
       continue;
     }
@@ -329,13 +329,13 @@ barev_auto_connect_timer(gpointer data)
 
     bb = purple_buddy_get_protocol_data(pb);
     if (!bb) {
-      purple_debug_info("bonjour", "Barev: buddy %s has no protocol data\n",
+      purple_debug_info("barev", "Barev: buddy %s has no protocol data\n",
                         who ? who : "(null)");
       continue;
     }
 
     if (!bb->ips || !bb->ips->data) {
-      purple_debug_info("bonjour", "Barev: buddy %s has no IP addresses\n",
+      purple_debug_info("barev", "Barev: buddy %s has no IP addresses\n",
                         who ? who : "(null)");
       continue;
     }
@@ -348,14 +348,14 @@ barev_auto_connect_timer(gpointer data)
        * That means connect() may still be in progress, or the peer never answered.
        */
       if (!bconv->recv_stream_start) {
-        purple_debug_info("bonjour",
+        purple_debug_info("barev",
                           "Barev: buddy %s has pending conversation (no stream yet), not treating as connected\n",
                           who ? who : "(null)");
         continue;
       }
 
       if (bconv->socket >= 0 && is_socket_really_connected(bconv->socket)) {
-        purple_debug_info("bonjour",
+        purple_debug_info("barev",
                           "Barev: buddy %s really connected (sent=%d ping_timer=%u)\n",
                           who ? who : "(null)",
                           bconv->sent_stream_start, bconv->ping_timer);
@@ -365,7 +365,7 @@ barev_auto_connect_timer(gpointer data)
         if (bconv->sent_stream_start == STREAM_FULLY_SENT &&
             bconv->recv_stream_start &&
             bconv->ping_timer == 0) {
-          purple_debug_info("bonjour",
+          purple_debug_info("barev",
               "Barev: buddy %s connected but no ping/presence — retrying stream_started\n",
               who ? who : "(null)");
           bonjour_jabber_stream_started(bconv);
@@ -375,14 +375,14 @@ barev_auto_connect_timer(gpointer data)
       }
 
       /* Socket or stream is dead – clean up and let the loop reconnect */
-      purple_debug_info("bonjour",
+      purple_debug_info("barev",
                         "Barev: buddy %s has DEAD connection, cleaning\n",
                         who ? who : "(null)");
 
       bonjour_jabber_close_conversation(bconv);
     }
 
-    purple_debug_info("bonjour", "Barev: attempting connection to %s at %s\n",
+    purple_debug_info("barev", "Barev: attempting connection to %s at %s\n",
                       who ? who : "(null)", (char *)bb->ips->data);
 
     /* Just ensure a stream/connection exists */
@@ -488,7 +488,7 @@ barev_load_persistent_contacts(PurpleAccount *account)
   g_free(filename);
 
   if (n > 0)
-    purple_debug_info("bonjour",
+    purple_debug_info("barev",
         "Loaded %u contact(s) from persistent contacts file\n", n);
 }
 
@@ -543,12 +543,12 @@ barev_save_persistent_contacts(PurpleAccount *account)
   gchar  *filename = barev_persistent_filename(account);
   GError *err      = NULL;
   if (!g_file_set_contents(filename, buf->str, (gssize)buf->len, &err)) {
-    purple_debug_warning("bonjour",
+    purple_debug_warning("barev",
         "Failed to write contacts file %s: %s\n",
         filename, err ? err->message : "(unknown)");
     if (err) g_error_free(err);
   } else {
-    purple_debug_info("bonjour",
+    purple_debug_info("barev",
         "Saved contacts to %s (%zu bytes)\n", filename, buf->len);
   }
   g_free(filename);
@@ -578,7 +578,7 @@ barev_migrate_flat_file_to_blist(PurpleAccount *account)
         return;   /* Nothing to migrate */
     }
 
-    purple_debug_info("bonjour", "Migrating %s to blist.xml\n", filename);
+    purple_debug_info("barev", "Migrating %s to blist.xml\n", filename);
 
     /* Ensure the destination group exists */
     group = purple_find_group(BONJOUR_GROUP_NAME);
@@ -635,7 +635,7 @@ barev_migrate_flat_file_to_blist(PurpleAccount *account)
         /* Persist IP + port as blist settings (also clears NO_SAVE) */
         bonjour_buddy_save_to_blist(pb, ip, port);
 
-        purple_debug_info("bonjour", "Migrated contact: %s ip=%s port=%d\n",
+        purple_debug_info("barev", "Migrated contact: %s ip=%s port=%d\n",
                           jid, ip, port);
 
         g_free(jid);
@@ -647,11 +647,11 @@ barev_migrate_flat_file_to_blist(PurpleAccount *account)
 
     /* Remove the old file — migration is done */
     if (remove(filename) != 0)
-        purple_debug_warning("bonjour",
+        purple_debug_warning("barev",
             "Could not remove old contacts file %s: %s\n",
             filename, g_strerror(errno));
     else
-        purple_debug_info("bonjour", "Migration complete; %s removed\n", filename);
+        purple_debug_info("barev", "Migration complete; %s removed\n", filename);
 
     g_free(filename);
 }
@@ -684,14 +684,14 @@ barev_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group)
     BarevBuddyInfo *info;
     const char *full_buddy_name = purple_buddy_get_name(buddy);
 
-    purple_debug_info("bonjour", "Barev: adding buddy %s\n", full_buddy_name);
+    purple_debug_info("barev", "Barev: adding buddy %s\n", full_buddy_name);
 
     /* Haze calls add_buddy again on reconnect for contacts it remembers from
      * Mission Control.  If we already have protocol_data (from blist.xml load
      * or a previous add_buddy call) keep it — overwriting loses bb->ips,
      * bb->conversation, and any other live state. */
     if (purple_buddy_get_protocol_data(buddy) != NULL) {
-        purple_debug_info("bonjour",
+        purple_debug_info("barev",
             "Barev: buddy %s already has protocol_data, skipping re-init\n",
             full_buddy_name);
         /* Still ensure NO_SAVE is cleared so the buddy persists across restarts. */
@@ -715,7 +715,7 @@ barev_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group)
         if (info->ipv6_address)
             barev_save_ip_to_account(gc->account, full_buddy_name,
                                      info->ipv6_address, info->port);
-        purple_debug_info("bonjour", "Barev: buddy %s ip=%s port=%d\n",
+        purple_debug_info("barev", "Barev: buddy %s ip=%s port=%d\n",
                           info->nick,
                           info->ipv6_address ? info->ipv6_address : "(none)",
                           info->port);
@@ -723,7 +723,7 @@ barev_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group)
         g_free(info->ipv6_address);
         g_free(info);
     } else {
-        purple_debug_warning("bonjour", "Barev: buddy name '%s' not in nick@ipv6 format; "
+        purple_debug_warning("barev", "Barev: buddy name '%s' not in nick@ipv6 format; "
                              "bb->ips left empty (blist.xml or stream will provide IP)\n",
                              full_buddy_name);
         bb->first = g_strdup(full_buddy_name);
@@ -745,7 +745,7 @@ barev_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group)
             bb->ips = g_slist_append(NULL, g_strdup(saved_ip));
             if (bb->port_p2pj <= 0 && saved_port > 0)
                 bb->port_p2pj = saved_port;
-            purple_debug_info("bonjour", "Barev: restored IP from blist for %s: %s\n",
+            purple_debug_info("barev", "Barev: restored IP from blist for %s: %s\n",
                               full_buddy_name, saved_ip);
         }
     }
@@ -762,7 +762,7 @@ barev_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group)
             g_free(key);
             if (bb->port_p2pj <= 0 && saved_port > 0)
                 bb->port_p2pj = saved_port;
-            purple_debug_info("bonjour",
+            purple_debug_info("barev",
                 "Barev: restored IP from account settings for %s: %s\n",
                 full_buddy_name, saved_ip);
         }
@@ -809,8 +809,8 @@ bonjour_login_barev(PurpleAccount *account)
   gc = purple_account_get_connection(account);
   g_return_if_fail(gc != NULL);
 
-  purple_debug_info("bonjour", "=== BAREV MODE STARTUP ===\n");
-  purple_debug_info("bonjour", "Account: %s\n",
+  purple_debug_info("barev", "=== BAREV MODE STARTUP ===\n");
+  purple_debug_info("barev", "Account: %s\n",
                     purple_account_get_username(account));
 
   bd = g_new0(BonjourData, 1);
@@ -827,10 +827,10 @@ bonjour_login_barev(PurpleAccount *account)
   if (self_ip && *self_ip) {
       /* nick@ipv6 */
       bd->jid = g_strdup_printf("%s@%s", accname, self_ip);
-      purple_debug_info("bonjour", "Our JID: %s\n", bd->jid);
+      purple_debug_info("barev", "Our JID: %s\n", bd->jid);
   } else {
       /* Fallback */
-      purple_debug_warning("bonjour", "No local IPv6 address found, using fallback\n");
+      purple_debug_warning("barev", "No local IPv6 address found, using fallback\n");
       bd->jid = g_strdup_printf("%s@localhost", accname);
   }
 
@@ -854,17 +854,17 @@ bonjour_login_barev(PurpleAccount *account)
     return;
   }
 
-  purple_debug_info("bonjour", "Jabber listener started on port %d\n",
+  purple_debug_info("barev", "Jabber listener started on port %d\n",
                     bd->jabber_data->port);
 
   /* Set initial presence */
   presence = purple_account_get_presence(account);
   if (!presence) {
-      purple_debug_error("bonjour", "No presence for account!\n");
+      purple_debug_error("barev", "No presence for account!\n");
   } else {
       status = purple_presence_get_active_status(presence);
       if (!status) {
-          purple_debug_error("bonjour", "No active status!\n");
+          purple_debug_error("barev", "No active status!\n");
       }
   }
 
@@ -880,7 +880,7 @@ bonjour_login_barev(PurpleAccount *account)
 
   /* 4. For any remaining buddies with no protocol_data yet, build bb from name */
   GSList *buddies = purple_find_buddies(account, NULL);
-  purple_debug_info("bonjour", "Found %d existing buddies\n",
+  purple_debug_info("barev", "Found %d existing buddies\n",
                     g_slist_length(buddies));
 
   for (GSList *l = buddies; l; l = l->next) {
@@ -897,13 +897,13 @@ bonjour_login_barev(PurpleAccount *account)
    * empty blist, making the initial Telepathy contact list empty. */
   purple_connection_set_state(gc, PURPLE_CONNECTED);
 
-  purple_debug_info("bonjour", "=== BAREV MODE READY ===\n");
+  purple_debug_info("barev", "=== BAREV MODE READY ===\n");
 
   /* 5. Start auto-connect timer: keep streams up while reachable */
   bd->reconnect_timer = purple_timeout_add_seconds(30,
                                                    barev_auto_connect_timer,
                                                    gc);
-  purple_debug_info("bonjour", "Auto-connect timer started (30s)\n");
+  purple_debug_info("barev", "Auto-connect timer started (30s)\n");
 }
 
 static void
@@ -1074,7 +1074,7 @@ static void bonjour_remove_buddy(PurpleConnection *pc, PurpleBuddy *buddy, Purpl
   BonjourBuddy *bb = purple_buddy_get_protocol_data(buddy);
 
   if (bb) {
-    purple_debug_info("bonjour", "Removing buddy: %s\n", purple_buddy_get_name(buddy));
+    purple_debug_info("barev", "Removing buddy: %s\n", purple_buddy_get_name(buddy));
 
     /* Clean up the conversation if it exists */
     if (bb->conversation) {
@@ -1087,7 +1087,7 @@ static void bonjour_remove_buddy(PurpleConnection *pc, PurpleBuddy *buddy, Purpl
     purple_buddy_set_protocol_data(buddy, NULL);
   } else {
     /* Nothing to do — Purple removes the node from blist.xml automatically */
-    purple_debug_info("bonjour", "Removing buddy without protocol data: %s\n",
+    purple_debug_info("barev", "Removing buddy without protocol data: %s\n",
                       purple_buddy_get_name(buddy));
   }
 
@@ -1254,7 +1254,7 @@ bonjour_tooltip_text(PurpleBuddy *buddy, PurpleNotifyUserInfo *user_info, gboole
     purple_notify_user_info_add_pair(user_info, _("Message"), message);
 
   if (bb == NULL) {
-    purple_debug_error("bonjour", "Got tooltip request for a buddy without protocol data.\n");
+    purple_debug_error("barev", "Got tooltip request for a buddy without protocol data.\n");
     return;
   }
 
@@ -1470,7 +1470,7 @@ _set_default_name_cb(gpointer data) {
   PurpleAccountOption *option;
 
   if (!fullname) {
-    purple_debug_info("bonjour", "Unable to look up First and Last name or Username from system; using defaults.\n");
+    purple_debug_info("barev", "Unable to look up First and Last name or Username from system; using defaults.\n");
     return FALSE;
   }
 
@@ -1514,7 +1514,7 @@ _win32_name_lookup_thread(gpointer data) {
 
     NetGetDCName(NULL, NULL, &servername);
 
-    /* purple_debug_info("bonjour", "Looking up the full name from the %s.\n", (servername ? "domain controller" : "local machine")); */
+    /* purple_debug_info("barev", "Looking up the full name from the %s.\n", (servername ? "domain controller" : "local machine")); */
 
     if (NetUserGetInfo((LPCWSTR) servername, username, 10, &info) == NERR_Success
         && info != NULL && ((LPUSER_INFO_10) info)->usri10_full_name != NULL
@@ -1525,7 +1525,7 @@ _win32_name_lookup_thread(gpointer data) {
     }
     /* Fall back to the local machine if we didn't get the full name from the domain controller */
     else if (servername != NULL) {
-      /* purple_debug_info("bonjour", "Looking up the full name from the local machine"); */
+      /* purple_debug_info("barev", "Looking up the full name from the local machine"); */
 
       if (info != NULL) NetApiBufferFree(info);
       info = NULL;

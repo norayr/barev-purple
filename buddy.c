@@ -21,7 +21,7 @@
 #include "buddy.h"
 #include "account.h"
 #include "blist.h"
-#include "bonjour.h"
+#include "barev.h"
 #include "glibcompat.h"
 #include "debug.h"
 
@@ -193,7 +193,7 @@ bonjour_buddy_add_to_purple(BonjourBuddy *bonjour_buddy, PurpleBuddy *buddy)
      new_hash = (bonjour_buddy->phsh && *(bonjour_buddy->phsh)) ? bonjour_buddy->phsh : NULL;
 
      if (new_hash && !purple_strequal(old_hash, new_hash)) {
-         purple_debug_info("bonjour",
+         purple_debug_info("barev",
                            "Barev: buddy icon hash changed for %s, ignoring (no mDNS)\n",
                            name);
          /* Optionally: clear or keep old icon; for now we just ignore. */
@@ -239,7 +239,7 @@ void bonjour_buddy_got_buddy_icon(BonjourBuddy *buddy, gconstpointer data, gsize
 
   *p = '\0';
 
-  purple_debug_info("bonjour", "Got buddy icon for %s icon hash='%s' phsh='%s'.\n", buddy->name,
+  purple_debug_info("barev", "Got buddy icon for %s icon hash='%s' phsh='%s'.\n", buddy->name,
         hash, buddy->phsh ? buddy->phsh : "(null)");
 
   purple_buddy_icons_set_for_user(buddy->account, buddy->name,
@@ -319,7 +319,7 @@ bonjour_buddies_load_from_blist(PurpleAccount *account)
     /* Mark offline until a stream is actually established */
     purple_prpl_got_user_status(account, name, BONJOUR_STATUS_ID_OFFLINE, NULL);
 
-    purple_debug_info("bonjour",
+    purple_debug_info("barev",
         "Loaded saved contact from blist: %s ip=%s port=%d\n", name, ip, port);
   }
 
