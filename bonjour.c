@@ -51,6 +51,8 @@
 #include <sys/socket.h>
 #include <stdio.h>
 
+
+#ifdef BAREV_DEBUG
 /* ─── diagnostic file logger (written to /tmp/barev-debug.log) ─── */
 #define BAREV_LOG_FILE "/tmp/barev-debug.log"
 static FILE              *barev_log_fp   = NULL;
@@ -82,8 +84,7 @@ static void barev_diag_cleanup(void) {
     barev_orig_ops = NULL;
     if (barev_log_fp) { fclose(barev_log_fp); barev_log_fp = NULL; }
 }
-
-
+#endif /* BAREV_DEBUG */
 
 typedef struct {
   PurpleConnection *pc;
@@ -1328,7 +1329,9 @@ bonjour_can_receive_file(PurpleConnection *connection, const char *who)
 static gboolean
 plugin_unload(PurplePlugin *plugin)
 {
+#ifdef BAREV_DEBUG
   barev_diag_cleanup();
+#endif
 
   /* These shouldn't happen here because they are allocated in _init() */
 
@@ -1609,7 +1612,9 @@ init_plugin(PurplePlugin *plugin)
 {
   PurpleAccountOption *option;
 
+#ifdef BAREV_DEBUG
   barev_diag_init();
+#endif
 
   initialize_default_account_values();
 
