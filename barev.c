@@ -345,13 +345,23 @@ barev_auto_connect_timer(gpointer data)
 
       /*
        * Don't claim "really connected" if the XMPP stream has never started.
-       * That means connect() may still be in progress, or the peer never answered.
+       * That means connect() may still be in progress, or the peer accepted
+       * TCP but never sent <stream:stream>.
+       * Apply a hard deadline so stuck connections are cleaned up and retried.
        */
       if (!bconv->recv_stream_start) {
+        time_t pending_secs = time(NULL) - bconv->last_activity;
+        if (pending_secs < PENDING_STREAM_TIMEOUT) {
+          purple_debug_info("barev",
+                            "Barev: buddy %s has pending conversation (no stream yet, %lds), not treating as connected\n",
+                            who ? who : "(null)", (long)pending_secs);
+          continue;
+        }
         purple_debug_info("barev",
-                          "Barev: buddy %s has pending conversation (no stream yet), not treating as connected\n",
-                          who ? who : "(null)");
-        continue;
+                          "Barev: buddy %s pending connection timed out (%lds), reconnecting\n",
+                          who ? who : "(null)", (long)pending_secs);
+        bonjour_jabber_close_conversation(bconv);
+        /* fall through to bonjour_jabber_open_stream */
       }
 
       if (bconv->socket >= 0 && is_socket_really_connected(bconv->socket)) {
