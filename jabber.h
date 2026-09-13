@@ -36,6 +36,11 @@
 
 #define STREAM_END "</stream:stream>"
 
+/* Maximum seconds to wait for the peer to send <stream:stream> after the TCP
+ * connection is established.  If exceeded, the connection is dropped and
+ * re-attempted.  Covers both stuck EINPROGRESS and connected-but-silent peers. */
+#define PENDING_STREAM_TIMEOUT 120
+
 typedef enum {
   STREAM_NOT_SENT  = 0,
   STREAM_PARTIALLY_SENT = 1,
