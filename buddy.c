@@ -43,6 +43,9 @@ bonjour_buddy_new(const gchar *name, PurpleAccount* account)
 
 void clear_bonjour_buddy_values(BonjourBuddy *buddy) {
 
+  if (buddy == NULL)
+    return;
+
   _B_CLR(buddy->first)
   _B_CLR(buddy->email);
   _B_CLR(buddy->ext);
@@ -332,6 +335,9 @@ bonjour_buddies_load_from_blist(PurpleAccount *account)
 void
 bonjour_buddy_delete(BonjourBuddy *buddy)
 {
+  if (buddy == NULL)
+    return;
+
   g_free(buddy->name);
   while (buddy->ips != NULL) {
     g_free(buddy->ips->data);
