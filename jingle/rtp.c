@@ -475,7 +475,13 @@ jingle_rtp_init_media(JingleContent *content)
 	 * Explicitly disable SRTP; newer Farstream defaults to require-encryption
 	 * and the pipeline fails to build because we do not negotiate crypto
 	 * (no <crypto>/DTLS-SRTP support in this Jingle stack). */
-	purple_media_set_require_encryption(media, name, remote_jid, FALSE);
+	{
+		gboolean r = purple_media_set_require_encryption(media, name,
+				remote_jid, FALSE);
+		purple_debug_info("jingle-rtp",
+				"purple_media_set_require_encryption(name=%s, participant=%s, FALSE) -> %d\n",
+				name, remote_jid, r);
+	}
 
 	g_free(name);
 	g_free(media_type);
