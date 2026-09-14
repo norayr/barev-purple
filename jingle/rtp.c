@@ -11,11 +11,14 @@
 #include "../jabber.h"
 #include "jingle.h"
 #include "media.h"
+#include "media-gst.h"
 #include "mediamanager.h"
 #include "rawudp.h"
 #include "rtp.h"
 #include "session.h"
 #include "debug.h"
+
+#include <gst/gst.h>
 
 #include <string.h>
 
@@ -373,12 +376,73 @@ jingle_rtp_ready(JingleSession *session)
 	}
 }
 
+/* Newer Farstream (>= 0.2.9) inserts GstSrtpEnc/GstSrtpDec into the pipeline
+ * even when require-encryption is FALSE.  With no crypto keys the encoder
+ * fails to initialise and kills the whole call.  Since Barev runs over
+ * Yggdrasil (which is already end-to-end encrypted) we do not want SRTP at
+ * all; catch the elements as GstRtpBin adds them and set their cipher/auth
+ * enums to "null" (0) so they behave as passthrough. */
+static void
+barev_srtp_neuter_deep_element_added(GstBin *pipeline, GstBin *sub_bin,
+		GstElement *element, gpointer user_data)
+{
+	GstElementFactory *factory = gst_element_get_factory(element);
+	const gchar *fname;
+
+	(void)pipeline; (void)sub_bin; (void)user_data;
+
+	if (factory == NULL)
+		return;
+
+	fname = gst_plugin_feature_get_name(GST_PLUGIN_FEATURE(factory));
+	if (fname == NULL)
+		return;
+
+	if (g_str_equal(fname, "srtpenc") || g_str_equal(fname, "srtpdec")) {
+		purple_debug_info("jingle-rtp",
+				"neutering %s (SRTP not negotiated, forcing passthrough)\n",
+				fname);
+		/* Enum value 0 == null cipher/auth in gst-plugins-bad. */
+		g_object_set(element,
+				"rtp-cipher",  0,
+				"rtcp-cipher", 0,
+				"rtp-auth",    0,
+				"rtcp-auth",   0,
+				NULL);
+	}
+}
+
+static void
+barev_srtp_neuter_install(void)
+{
+	static gboolean installed = FALSE;
+	GstElement *pipeline;
+
+	if (installed)
+		return;
+
+	pipeline = purple_media_manager_get_pipeline(purple_media_manager_get());
+	if (pipeline == NULL) {
+		purple_debug_warning("jingle-rtp",
+				"no media pipeline yet, cannot install SRTP neuter\n");
+		return;
+	}
+
+	g_signal_connect(pipeline, "deep-element-added",
+			G_CALLBACK(barev_srtp_neuter_deep_element_added), NULL);
+	installed = TRUE;
+	purple_debug_info("jingle-rtp", "SRTP neuter installed on pipeline %p\n",
+			pipeline);
+}
+
 static PurpleMedia *
 jingle_rtp_create_media(JingleContent *content)
 {
 	JingleSession *session = jingle_content_get_session(content);
 	BonjourJabberConversation *bconv = jingle_session_get_bconv(session);
 	gchar *remote_jid = jingle_session_get_remote_jid(session);
+
+	barev_srtp_neuter_install();
 
 	PurpleMedia *media = purple_media_manager_create_media(
 			purple_media_manager_get(),
