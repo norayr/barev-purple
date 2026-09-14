@@ -1299,7 +1299,7 @@ bonjour_do_group_change(PurpleBuddy *buddy, const char *new_group) {
   if (purple_strequal(new_group, BONJOUR_GROUP_NAME))
     purple_blist_node_set_flags((PurpleBlistNode *)buddy, oldflags | PURPLE_BLIST_NODE_FLAG_NO_SAVE);
   else
-    purple_blist_node_set_flags((PurpleBlistNode *)buddy, oldflags ^ PURPLE_BLIST_NODE_FLAG_NO_SAVE);
+    purple_blist_node_set_flags((PurpleBlistNode *)buddy, oldflags & ~PURPLE_BLIST_NODE_FLAG_NO_SAVE);
 
 }
 
