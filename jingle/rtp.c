@@ -376,12 +376,15 @@ jingle_rtp_ready(JingleSession *session)
 	}
 }
 
-/* Newer Farstream (>= 0.2.9) inserts GstSrtpEnc/GstSrtpDec into the pipeline
- * even when require-encryption is FALSE.  With no crypto keys the encoder
- * fails to initialise and kills the whole call.  Since Barev runs over
- * Yggdrasil (which is already end-to-end encrypted) we do not want SRTP at
- * all; catch the elements as GstRtpBin adds them and set their cipher/auth
- * enums to "null" (0) so they behave as passthrough. */
+/* Newer Farstream (>= 0.2.9) sets GstRtpBin's rtp-profile to a Secure profile
+ * (SAVP/SAVPF) even when require-encryption is FALSE, causing rtpbin to insert
+ * SrtpEnc/SrtpDec into the pipeline.  With no crypto keys they fail to init
+ * and kill the call.  Barev runs over Yggdrasil (already end-to-end
+ * encrypted) so SRTP is redundant here; force rtpbin back to AVP as soon as
+ * it appears, before it wires up the SRTP elements.  As a fallback also
+ * neuter any SrtpEnc/SrtpDec that still get added: their cipher/auth enums
+ * accept 0 == null, which makes them behave as passthrough. */
+#define BAREV_GST_RTP_PROFILE_AVP 1
 static void
 barev_srtp_neuter_deep_element_added(GstBin *pipeline, GstBin *sub_bin,
 		GstElement *element, gpointer user_data)
@@ -398,11 +401,20 @@ barev_srtp_neuter_deep_element_added(GstBin *pipeline, GstBin *sub_bin,
 	if (fname == NULL)
 		return;
 
-	if (g_str_equal(fname, "srtpenc") || g_str_equal(fname, "srtpdec")) {
+	if (g_str_equal(fname, "rtpbin") || g_str_equal(fname, "rtpsession")) {
+		/* Force plain AVP so rtpbin never even adds srtpenc/srtpdec. */
+		if (g_object_class_find_property(G_OBJECT_GET_CLASS(element),
+				"rtp-profile") != NULL) {
+			purple_debug_info("jingle-rtp",
+					"forcing %s rtp-profile to AVP\n", fname);
+			g_object_set(element, "rtp-profile",
+					BAREV_GST_RTP_PROFILE_AVP, NULL);
+		}
+	}
+
+	if (g_str_equal(fname, "srtpenc")) {
 		purple_debug_info("jingle-rtp",
-				"neutering %s (SRTP not negotiated, forcing passthrough)\n",
-				fname);
-		/* Enum value 0 == null cipher/auth in gst-plugins-bad. */
+				"neutering srtpenc (fallback, forcing passthrough)\n");
 		g_object_set(element,
 				"rtp-cipher",  0,
 				"rtcp-cipher", 0,
@@ -410,6 +422,8 @@ barev_srtp_neuter_deep_element_added(GstBin *pipeline, GstBin *sub_bin,
 				"rtcp-auth",   0,
 				NULL);
 	}
+	/* srtpdec has no rtp-cipher property; it derives everything from caps.
+	 * Forcing AVP on rtpbin should keep it out of the pipeline entirely. */
 }
 
 static void
