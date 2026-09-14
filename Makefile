@@ -20,20 +20,56 @@ GLIB_LIBS      := $(shell pkg-config --libs glib-2.0)
 LIBXML_CFLAGS  := $(shell pkg-config --cflags libxml-2.0)
 LIBXML_LIBS    := $(shell pkg-config --libs libxml-2.0)
 
+# Optional GStreamer / voice-video support.
+# Auto-detected if USE_VV is unset; pass USE_VV=1 to force on, USE_VV=0 to force off.
+# Gentoo ebuilds: USE="gstreamer" → emake USE_VV=1; without → emake USE_VV=0.
+ifeq ($(origin USE_VV), undefined)
+  GST_CFLAGS := $(shell pkg-config --cflags gstreamer-1.0 2>/dev/null)
+  ifneq ($(GST_CFLAGS),)
+    USE_VV   := 1
+    GST_LIBS := $(shell pkg-config --libs gstreamer-1.0 2>/dev/null)
+  else
+    USE_VV   := 0
+  endif
+endif
+
+ifeq ($(USE_VV), 1)
+  ifndef GST_CFLAGS
+    GST_CFLAGS := $(shell pkg-config --cflags gstreamer-1.0)
+    GST_LIBS   := $(shell pkg-config --libs   gstreamer-1.0)
+  endif
+  CFLAGS       += $(GST_CFLAGS) -DUSE_VV
+  LDLIBS_EXTRA  = $(GST_LIBS)
+else
+  LDLIBS_EXTRA  =
+endif
+
 # Final compiler & linker flags
 CFLAGS += $(WARN) $(PICFLAG) \
           $(PURPLE_CFLAGS) $(GLIB_CFLAGS) $(LIBXML_CFLAGS) $(AVAHI_CFLAGS)
 
-LDLIBS  = $(PURPLE_LIBS) $(GLIB_LIBS) $(LIBXML_LIBS) $(AVAHI_LIBS)
+LDLIBS  = $(PURPLE_LIBS) $(GLIB_LIBS) $(LIBXML_LIBS) $(AVAHI_LIBS) $(LDLIBS_EXTRA)
 
 PLUGIN  = libbarev.so
+
+JINGLE_SRCS = \
+  jingle/jingle.c \
+  jingle/session.c \
+  jingle/transport.c \
+  jingle/rawudp.c \
+  jingle/content.c
+
+ifeq ($(USE_VV), 1)
+  JINGLE_SRCS += jingle/rtp.c
+endif
 
 SRCS = \
   barev.c \
   buddy.c \
   jabber.c \
   parser.c \
-  bonjour_ft.c
+  bonjour_ft.c \
+  $(JINGLE_SRCS)
 
 OBJS = $(SRCS:.c=.o)
 

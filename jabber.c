@@ -62,6 +62,7 @@
 #include "util.h"
 
 #include "jabber.h"
+#include "jingle/jingle.h"
 #include "parser.h"
 #include "barev.h"
 #include "buddy.h"
@@ -1192,6 +1193,18 @@ bonjour_jabber_process_packet(PurpleBuddy *pb, xmlnode *packet)
         if (barev_handle_vcard_iq(packet, pb))
             return;
 
+        /* Jingle voice/video? */
+        {
+            xmlnode *jingle_node = xmlnode_get_child_with_namespace(
+                    packet, "jingle", "urn:xmpp:jingle:1");
+            if (jingle_node && bb && bb->conversation) {
+                barev_jingle_parse(bb->conversation,
+                        purple_buddy_get_name(pb),
+                        type, id, jingle_node);
+                return;
+            }
+        }
+
         /* Only hand to file-transfer parser if IQ actually has children */
         if (packet->child != NULL) {
             xep_iq_parse(packet, pb);
@@ -2066,8 +2079,11 @@ void bonjour_jabber_stream_started(BonjourJabberConversation *bconv) {
         purple_buddy_get_name(pb), bconv->ping_timer);
 
     if (bb) {
-      /* Start ping mechanism */
       bonjour_jabber_start_ping(bconv);
+#ifdef USE_VV
+      purple_prpl_got_media_caps(bconv->account,
+                                 purple_buddy_get_name(pb));
+#endif
     }
 
     /* and now the original buffered-send code: */
@@ -3377,6 +3393,11 @@ bonjour_jabber_close_conversation(BonjourJabberConversation *bconv)
   if (bconv->tx_buf)
     purple_circ_buffer_destroy(bconv->tx_buf);
 
+  /* Terminate any active Jingle sessions on this connection */
+  if (bconv->jingle_sessions) {
+    barev_jingle_terminate_sessions(bconv);
+  }
+
   g_free(bconv->buddy_name);
   g_free(bconv->ip);
   g_free(bconv->local_ip);
@@ -3488,6 +3509,32 @@ xep_iq_send_and_free(XepIq *iq)
   g_free(iq);
 
   return (ret >= 0) ? 0 : -1;
+}
+
+int
+bonjour_jabber_send_xml(BonjourJabberConversation *bconv, xmlnode *node)
+{
+  gchar *str;
+  int ret = -1;
+
+  if (!bconv || !node || !bconv->pb)
+    return -1;
+  str = xmlnode_to_str(node, NULL);
+  if (!str)
+    return -1;
+  ret = _send_data(bconv->pb, str);
+  g_free(str);
+  return ret;
+}
+
+static guint barev_jingle_id_counter = 0;
+
+gchar *
+bonjour_jabber_next_id(void)
+{
+  return g_strdup_printf("j-%lu-%u",
+                         (unsigned long)time(NULL),
+                         ++barev_jingle_id_counter);
 }
 
 /* Barev: return local IPs suitable for Yggdrasil file-transfer.

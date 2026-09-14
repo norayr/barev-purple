@@ -39,6 +39,10 @@
 
 #include "barev.h"
 #include "jabber.h"
+#include "jingle/jingle.h"
+#ifdef USE_VV
+#include "jingle/rtp.h"
+#endif
 #include "buddy.h"
 #include "bonjour_ft.h"
 
@@ -361,10 +365,8 @@ barev_auto_connect_timer(gpointer data)
                           "Barev: buddy %s pending connection timed out (%lds), reconnecting\n",
                           who ? who : "(null)", (long)pending_secs);
         bonjour_jabber_close_conversation(bconv);
-        /* fall through to bonjour_jabber_open_stream */
-      }
-
-      if (bconv->socket >= 0 && is_socket_really_connected(bconv->socket)) {
+        /* bconv is freed; skip to open_stream below */
+      } else if (bconv->socket >= 0 && is_socket_really_connected(bconv->socket)) {
         purple_debug_info("barev",
                           "Barev: buddy %s really connected (sent=%d ping_timer=%u)\n",
                           who ? who : "(null)",
@@ -382,14 +384,14 @@ barev_auto_connect_timer(gpointer data)
         }
 
         continue;
+      } else {
+        /* Socket or stream is dead – clean up and let the loop reconnect */
+        purple_debug_info("barev",
+                          "Barev: buddy %s has DEAD connection, cleaning\n",
+                          who ? who : "(null)");
+
+        bonjour_jabber_close_conversation(bconv);
       }
-
-      /* Socket or stream is dead – clean up and let the loop reconnect */
-      purple_debug_info("barev",
-                        "Barev: buddy %s has DEAD connection, cleaning\n",
-                        who ? who : "(null)");
-
-      bonjour_jabber_close_conversation(bconv);
     }
 
     purple_debug_info("barev", "Barev: attempting connection to %s at %s\n",
@@ -1145,20 +1147,10 @@ bonjour_status_types(PurpleAccount *account)
 static void
 bonjour_convo_closed(PurpleConnection *connection, const char *who)
 {
-  PurpleBuddy *buddy = purple_find_buddy(connection->account, who);
-  BonjourBuddy *bb;
-
-  if (buddy == NULL || (bb = purple_buddy_get_protocol_data(buddy)) == NULL)
-  {
-    /*
-     * This buddy is not in our buddy list, and therefore does not really
-     * exist, so we won't have any data about them.
-     */
-    return;
-  }
-
-  bonjour_jabber_close_conversation(bb->conversation);
-  bb->conversation = NULL;
+  /* Barev keeps TCP streams open regardless of chat window lifecycle.
+   * Closing the XMPP stream here would make the buddy appear offline
+   * whenever the user closes a conversation window. */
+  (void)connection; (void)who;
 }
 
 static void
@@ -1353,6 +1345,37 @@ plugin_unload(PurplePlugin *plugin)
 
 static PurplePlugin *my_protocol = NULL;
 
+#ifdef USE_VV
+static gboolean
+barev_initiate_media(PurpleAccount *account, const char *who,
+                     PurpleMediaSessionType type)
+{
+  PurpleBuddy *pb = purple_find_buddy(account, who);
+  BonjourBuddy *bb;
+
+  if (!pb) return FALSE;
+  bb = purple_buddy_get_protocol_data(pb);
+  if (!bb || !bb->conversation || !bb->conversation->recv_stream_start)
+    return FALSE;
+
+  return jingle_rtp_initiate_media(bb->conversation, who, type);
+}
+
+static PurpleMediaCaps
+barev_get_media_caps(PurpleAccount *account, const char *who)
+{
+  PurpleBuddy *pb = purple_find_buddy(account, who);
+  BonjourBuddy *bb;
+
+  if (!pb) return PURPLE_MEDIA_CAPS_NONE;
+  bb = purple_buddy_get_protocol_data(pb);
+  if (!bb || !bb->conversation || !bb->conversation->recv_stream_start)
+    return PURPLE_MEDIA_CAPS_NONE;
+
+  return PURPLE_MEDIA_CAPS_AUDIO | PURPLE_MEDIA_CAPS_AUDIO_VIDEO;
+}
+#endif /* USE_VV */
+
 static PurplePluginProtocolInfo prpl_info =
 {
   OPT_PROTO_NO_PASSWORD,
@@ -1422,8 +1445,13 @@ static PurplePluginProtocolInfo prpl_info =
   NULL,                                                    /* get_attention_types */
   sizeof(PurplePluginProtocolInfo),                        /* struct_size */
   NULL,                                                    /* get_account_text_table */
+#ifdef USE_VV
+  barev_initiate_media,                                    /* initiate_media */
+  barev_get_media_caps,                                    /* get_media_caps */
+#else
   NULL,                                                    /* initiate_media */
   NULL,                                                    /* get_media_caps */
+#endif
   NULL,                                                    /* get_moods */
   NULL,                                                    /* set_public_alias */
   NULL,                                                    /* get_public_alias */
