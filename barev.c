@@ -800,8 +800,20 @@ static char *default_lastname;
 const char *
 bonjour_get_jid(PurpleAccount *account)
 {
-  PurpleConnection *conn = purple_account_get_connection(account);
-  BonjourData *bd = conn->proto_data;
+  PurpleConnection *conn;
+  BonjourData *bd;
+
+  if (account == NULL)
+    return NULL;
+
+  conn = purple_account_get_connection(account);
+  if (conn == NULL)
+    return NULL;
+
+  bd = conn->proto_data;
+  if (bd == NULL)
+    return NULL;
+
   return bd->jid;
 }
 
@@ -858,6 +870,10 @@ bonjour_login_barev(PurpleAccount *account)
     purple_connection_error_reason(gc,
       PURPLE_CONNECTION_ERROR_NETWORK_ERROR,
       _("Unable to listen for incoming IM connections"));
+    /* purple_connection_error_reason() only schedules the disconnect; the
+     * protocol's close() runs later from the event loop.  Detach our data
+     * first so close() does not touch this freed BonjourData. */
+    purple_connection_set_protocol_data(gc, NULL);
     g_free(bd->jabber_data);
     g_free(bd->jid);
     g_free(bd);
@@ -993,10 +1009,16 @@ bonjour_list_icon(PurpleAccount *account, PurpleBuddy *buddy)
 static int
 bonjour_send_im(PurpleConnection *connection, const char *to, const char *msg, PurpleMessageFlags flags)
 {
-  if(!to || !msg)
+  BonjourData *bd;
+
+  if(!connection || !to || !msg)
     return 0;
 
-  return bonjour_jabber_send_message(((BonjourData*)(connection->proto_data))->jabber_data, to, msg);
+  bd = connection->proto_data;
+  if (bd == NULL || bd->jabber_data == NULL)
+    return 0;
+
+  return bonjour_jabber_send_message(bd->jabber_data, to, msg);
 }
 
 static void
@@ -1064,7 +1086,7 @@ bonjour_set_status(PurpleAccount *account, PurpleStatus *status)
       /* If going offline, also send stream end */
       if (offline && bb->conversation->socket >= 0) {
         size_t len = strlen(STREAM_END);
-        send(bb->conversation->socket, STREAM_END, len, 0);
+        send(bb->conversation->socket, STREAM_END, len, MSG_NOSIGNAL);
       }
     }
     g_slist_free(buddies);

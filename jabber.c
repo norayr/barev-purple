@@ -521,7 +521,15 @@ barev_handle_vcard_iq(xmlnode *packet, PurpleBuddy *pb)
             BarevVcardReq *r = g_hash_table_lookup(barev_vcard_userinfo, id);
             if (r) {
                 PurpleConnection *gc = purple_account_get_connection(r->account);
-                PurpleNotifyUserInfo *info = purple_notify_user_info_new();
+                PurpleNotifyUserInfo *info;
+
+                if (gc == NULL) {
+                    /* Account went away while the vCard request was in flight. */
+                    g_hash_table_remove(barev_vcard_userinfo, id);
+                    return TRUE;
+                }
+
+                info = purple_notify_user_info_new();
 
                 gchar *fn = NULL;
                 xmlnode *fn_node = xmlnode_get_child(vcard, "FN");
@@ -637,7 +645,10 @@ bonjour_get_conversation_jid(BonjourJabberConversation *bconv)
     } else {
         /* Fallback to account-wide JID */
         const char *global_jid = bonjour_get_jid(bconv->account);
-        g_strlcpy(jid_buf, global_jid, sizeof(jid_buf));
+        if (global_jid && *global_jid)
+            g_strlcpy(jid_buf, global_jid, sizeof(jid_buf));
+        else
+            jid_buf[0] = '\0';
     }
 
     return jid_buf;
@@ -1617,12 +1628,14 @@ _send_data_write_cb(gpointer data, gint source, PurpleInputCondition cond)
 static gint _send_data(PurpleBuddy *pb, char *message)
 {
   gint ret;
-  int len = strlen(message);
+  int len;
   BonjourBuddy *bb;
   BonjourJabberConversation *bconv;
 
   if (!pb || !message)
     return -1;
+
+  len = strlen(message);
 
   bb = purple_buddy_get_protocol_data(pb);
   if (!bb || !bb->conversation) {
@@ -2297,6 +2310,12 @@ bonjour_jabber_start(BonjourJabber *jdata)
     int on = 1;
     if (setsockopt(jdata->socket6, IPPROTO_IPV6, IPV6_V6ONLY, &on, sizeof(on)) != 0) {
       purple_debug_error("barev", "couldn't force IPv6\n");
+      close(jdata->socket6);
+      jdata->socket6 = -1;
+      if (jdata->socket != -1) {
+        close(jdata->socket);
+        jdata->socket = -1;
+      }
       return -1;
     }
 #endif
@@ -2696,9 +2715,17 @@ bonjour_jabber_conv_match_by_name(BonjourJabberConversation *bconv)
 
 
 void bonjour_jabber_conv_match_by_ip(BonjourJabberConversation *bconv) {
-  BonjourJabber *jdata = ((BonjourData*) bconv->account->gc->proto_data)->jabber_data;
+  BonjourJabber *jdata;
   struct _match_buddies_by_address_t *mbba;
   GSList *buddies;
+
+  g_return_if_fail(bconv != NULL);
+  g_return_if_fail(bconv->account != NULL);
+  g_return_if_fail(bconv->account->gc != NULL);
+  g_return_if_fail(bconv->account->gc->proto_data != NULL);
+
+  jdata = ((BonjourData*) bconv->account->gc->proto_data)->jabber_data;
+  g_return_if_fail(jdata != NULL);
 
   /* This routine is a fallback matcher.  Do not leave a previous tentative
    * association in place if every IP candidate is rejected. */
@@ -2944,6 +2971,15 @@ _find_or_start_conversation(BonjourJabber *jdata, const gchar *to)
   if (bb->conversation == NULL)
   {
      purple_debug_info("barev", "Creating new conversation for %s (was NULL)\n", to);
+
+    if (bb->ips == NULL || bb->ips->data == NULL) {
+      /* No address known yet (e.g. bare-nick contact whose IP has not been
+       * learned).  Connecting is impossible; don't dereference NULL. */
+      purple_debug_warning("barev",
+          "No known IP for buddy %s; cannot start conversation\n", to);
+      return NULL;
+    }
+
     const char *ip = bb->ips->data; /* Start with the first IP address. */
 
     purple_debug_info("barev", "Starting conversation with %s at %s:%d\n", to, ip, bb->port_p2pj);
@@ -3262,6 +3298,13 @@ bonjour_jabber_close_conversation(BonjourJabberConversation *bconv)
   if (!bconv || bconv->closing)
     return;
 
+  /* Never free the parser context from inside a libxml SAX callback: libxml
+   * would keep using it after we return.  Defer to the event loop instead. */
+  if (bconv->in_parser) {
+    async_bonjour_jabber_close_conversation(bconv);
+    return;
+  }
+
   bconv->closing = TRUE;
 
   purple_debug_info("barev",
@@ -3420,7 +3463,15 @@ bonjour_jabber_stop(BonjourJabber *jdata)
   }
 
   while (jdata->pending_conversations != NULL) {
-    bonjour_jabber_close_conversation(jdata->pending_conversations->data);
+    BonjourJabberConversation *bconv = jdata->pending_conversations->data;
+
+    /* Detach the node *before* closing: close_conversation() no-ops on an
+     * already-closing conversation, which used to spin this loop forever. */
+    jdata->pending_conversations =
+        g_slist_delete_link(jdata->pending_conversations,
+                            jdata->pending_conversations);
+    if (bconv != NULL)
+      bonjour_jabber_close_conversation(bconv);
   }
 }
 
@@ -3472,6 +3523,9 @@ xep_iq_send_and_free(XepIq *iq)
 {
   int ret = -1;
   PurpleBuddy *pb = NULL;
+
+  if (iq == NULL)
+    return -1;
 
   /* start the talk, reuse the message socket  */
   pb = _find_or_start_conversation((BonjourJabber*) iq->data, iq->to);

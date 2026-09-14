@@ -70,6 +70,10 @@ typedef struct _BonjourJabberConversation
   PurpleCircBuffer *tx_buf;
   int sent_stream_start; /* 0 = Unsent, 1 = Partial, 2 = Complete */
   gboolean recv_stream_start;
+  /* TRUE while libxml is dispatching SAX callbacks for this conversation.
+   * Destroying the parser from inside a callback is a use-after-free, so
+   * close requests are deferred to the event loop while this is set. */
+  gboolean in_parser;
   PurpleProxyConnectData *connect_data;
   gpointer stream_data;
   xmlParserCtxt *context;
