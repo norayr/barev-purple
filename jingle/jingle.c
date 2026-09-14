@@ -19,15 +19,28 @@
 GType
 jingle_get_type(const gchar *type)
 {
-	if (type == NULL)
-		return G_TYPE_NONE;
+	GType result = G_TYPE_NONE;
 
-	if (purple_strequal(type, JINGLE_TRANSPORT_RAWUDP))
-		return JINGLE_TYPE_RAWUDP;
+	if (type == NULL) {
+		purple_debug_info("jingle", "jingle_get_type(NULL) -> G_TYPE_NONE\n");
+		return G_TYPE_NONE;
+	}
+
+	if (purple_strequal(type, JINGLE_TRANSPORT_RAWUDP)) {
+		result = JINGLE_TYPE_RAWUDP;
+		purple_debug_info("jingle", "jingle_get_type(%s) -> JINGLE_TYPE_RAWUDP=%lu\n",
+		                  type, (unsigned long)result);
+		return result;
+	}
 #ifdef USE_VV
-	else if (purple_strequal(type, JINGLE_APP_RTP))
-		return JINGLE_TYPE_RTP;
+	else if (purple_strequal(type, JINGLE_APP_RTP)) {
+		result = JINGLE_TYPE_RTP;
+		purple_debug_info("jingle", "jingle_get_type(%s) -> JINGLE_TYPE_RTP=%lu\n",
+		                  type, (unsigned long)result);
+		return result;
+	}
 #endif
+	purple_debug_info("jingle", "jingle_get_type(%s) unknown -> G_TYPE_NONE\n", type);
 	return G_TYPE_NONE;
 }
 
