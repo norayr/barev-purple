@@ -550,15 +550,35 @@ jingle_rtp_init_media(JingleContent *content)
 	}
 
 	/* Barev runs over Yggdrasil, which is already end-to-end encrypted.
-	 * Explicitly disable SRTP; newer Farstream defaults to require-encryption
-	 * and the pipeline fails to build because we do not negotiate crypto
-	 * (no <crypto>/DTLS-SRTP support in this Jingle stack). */
+	 * We would prefer plain RTP, but newer Farstream/GstRtpBin always inserts
+	 * GstSrtpEnc into the pipeline regardless of rtp-profile or
+	 * require-encryption, and srtpenc fails to init without a key.  Rather
+	 * than fight the pipeline, feed both peers a fixed SRTP master key so
+	 * srtpenc initialises cleanly.  This adds no real confidentiality (the
+	 * key is public in our source), but Yggdrasil below already provides
+	 * transport-level encryption, so nothing is lost. */
 	{
-		gboolean r = purple_media_set_require_encryption(media, name,
+		static const guint8 barev_fixed_srtp_key[30] = {
+			0xba, 0x8e, 0x8b, 0xa8, 0xef, 0xe6, 0x82, 0x0e,
+			0x9d, 0x7f, 0x94, 0x2c, 0x33, 0x11, 0xcd, 0x5a,
+			0x77, 0x42, 0x1e, 0xf0, 0x64, 0x03, 0x99, 0x2b,
+			0x18, 0xd4, 0x50, 0xa5, 0xc9, 0x71
+		};
+		gboolean re, se, sd;
+		re = purple_media_set_require_encryption(media, name,
 				remote_jid, FALSE);
+		se = purple_media_set_encryption_parameters(media, name,
+				"aes-128-icm", "hmac-sha1-80",
+				(const gchar *)barev_fixed_srtp_key,
+				sizeof(barev_fixed_srtp_key));
+		sd = purple_media_set_decryption_parameters(media, name,
+				remote_jid,
+				"aes-128-icm", "hmac-sha1-80",
+				(const gchar *)barev_fixed_srtp_key,
+				sizeof(barev_fixed_srtp_key));
 		purple_debug_info("jingle-rtp",
-				"purple_media_set_require_encryption(name=%s, participant=%s, FALSE) -> %d\n",
-				name, remote_jid, r);
+				"require_encryption -> %d, encrypt_params -> %d, decrypt_params -> %d\n",
+				re, se, sd);
 	}
 
 	g_free(name);
