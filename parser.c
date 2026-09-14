@@ -457,6 +457,7 @@ bonjour_parser_destroy(BonjourJabberConversation *bconv)
 
 void bonjour_parser_process(BonjourJabberConversation *bconv, const char *buf, int len)
 {
+  gboolean fresh = FALSE;
 
   if (!bconv || bconv->closing || bconv->close_timeout != 0)
     return;
@@ -465,9 +466,25 @@ void bonjour_parser_process(BonjourJabberConversation *bconv, const char *buf, i
     /* libxml inconsistently starts parsing on creating the
      * parser, so do a ParseChunk right afterwards to force it. */
     bconv->context = xmlCreatePushParserCtxt(&bonjour_parser_libxml, bconv, buf, len, NULL);
+    if (bconv->context == NULL) {
+      purple_debug_error("barev", "Failed to create XML parser context.\n");
+      return;
+    }
+    fresh = TRUE;
+  }
+
+  /* SAX callbacks below may try to tear the conversation down (e.g. a send
+   * error while answering a ping).  Mark the parser as busy so that the
+   * destructor is deferred instead of freeing the context under libxml. */
+  bconv->in_parser = TRUE;
+
+  if (fresh) {
+    /* force libxml to initialise the just-created context */
     xmlParseChunk(bconv->context, "", 0, 0);
-  } else if (xmlParseChunk(bconv->context, buf, len, 0) < 0)
+  } else if (xmlParseChunk(bconv->context, buf, len, 0) < 0) {
     /* TODO: What should we do here - I assume we should display an error or something (maybe just print something to the conv?) */
     purple_debug_error("barev", "Error parsing xml.\n");
+  }
 
+  bconv->in_parser = FALSE;
 }
