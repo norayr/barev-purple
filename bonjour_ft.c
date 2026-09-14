@@ -67,6 +67,9 @@ xep_ft_si_reject(BonjourData *bd, const char *id, const char *to, const char *er
     return;
   }
 
+  if (bd == NULL)
+    return;
+
   iq = xep_iq_new(bd, XEP_IQ_ERROR, to, bonjour_get_jid(bd->jabber_data->account), id);
   if(iq == NULL)
     return;
@@ -263,6 +266,8 @@ xep_ft_si_result(PurpleXfer *xfer, char *to)
     return;
 
   bd = xf->data;
+  if (bd == NULL)
+    return;
 
   purple_debug_info("barev", "xep file transfer stream initialization result.\n");
   iq = xep_iq_new(bd, XEP_IQ_RESULT, to, bonjour_get_jid(bd->jabber_data->account), xf->iq_id);
@@ -365,6 +370,8 @@ bonjour_new_xfer(PurpleConnection *gc, const char *who)
 
   /* Build the file transfer handle */
   xfer = purple_xfer_new(gc->account, PURPLE_XFER_SEND, who);
+  if (xfer == NULL)
+    return NULL;
   xfer->data = xep_xfer = g_new0(XepXfer, 1);
   xep_xfer->data = bd;
 
@@ -395,6 +402,8 @@ bonjour_send_file(PurpleConnection *gc, const char *who, const char *file)
   purple_debug_info("barev", "Bonjour-send-file to=%s.\n", who);
 
   xfer = bonjour_new_xfer(gc, who);
+  if (xfer == NULL)
+    return;
 
   if (file)
     purple_xfer_request_accepted(xfer, file);
@@ -645,6 +654,8 @@ add_ipv6_link_local_ifaces(xmlnode *cur_streamhost, const char *host,
     return FALSE;
 
   bb = purple_buddy_get_protocol_data(pb);
+  if (bb == NULL)
+    return FALSE;
 
   for (ip_elem = bb->ips;
        (ip_elem = g_slist_find_custom(ip_elem, host, (GCompareFunc)&xep_addr_differ));
@@ -672,6 +683,9 @@ __xep_bytestreams_parse(PurpleBuddy *pb, PurpleXfer *xfer, xmlnode *streamhost,
   XepXfer *xf = NULL;
 
   xf = (XepXfer*)xfer->data;
+  if (xf == NULL)
+    return FALSE;
+
   for(; streamhost; streamhost = xmlnode_get_next_twin(streamhost)) {
     if(!(jid = xmlnode_get_attrib(streamhost, "jid")) ||
        !(host = xmlnode_get_attrib(streamhost, "host")) ||
@@ -736,6 +750,7 @@ xep_bytestreams_parse(PurpleConnection *pc, xmlnode *packet, PurpleBuddy *pb)
 
   if(!purple_strequal(type, "set")) {
     purple_debug_info("barev", "bytestream offer Message type - Unknown-%s.\n", type);
+    xmlnode_free(query);
     return;
   }
 
@@ -748,12 +763,15 @@ xep_bytestreams_parse(PurpleConnection *pc, xmlnode *packet, PurpleBuddy *pb)
   streamhost = xmlnode_get_child(query, "streamhost");
 
   if(xfer && streamhost && __xep_bytestreams_parse(pb, xfer, streamhost, iq_id))
-    return; /* success */
+    return; /* success: xf->streamhost now owns the copied tree */
 
   purple_debug_error("barev", "Didn't find an acceptable streamhost.\n");
 
   if (iq_id && xfer != NULL)
     xep_ft_si_reject(bd, iq_id, xfer->who, "404", "cancel");
+
+  /* No streamhost was accepted, so the copy is not owned by any transfer. */
+  xmlnode_free(query);
 }
 
 static void
@@ -775,6 +793,8 @@ bonjour_xfer_receive(PurpleConnection *pc, const char *id, const char *sid, cons
 
   /* Build the file transfer handle */
   xfer = purple_xfer_new(pc->account, PURPLE_XFER_RECEIVE, from);
+  if (xfer == NULL)
+    return;
   xfer->data = xf = g_new0(XepXfer, 1);
   xf->data = bd;
   purple_xfer_set_filename(xfer, filename);
@@ -938,11 +958,18 @@ bonjour_bytestreams_listen(int sock, gpointer data)
     xf->listen_data = NULL;
 
     bd = xf->data;
+    if (bd == NULL)
+        return;
 
     iq = xep_iq_new(bd, XEP_IQ_SET,
                     xfer->who,
                     bonjour_get_jid(bd->jabber_data->account),
                     xf->sid);
+    if (iq == NULL) {
+        purple_debug_error("barev",
+                           "bytestreams-listen: failed to build streamhost IQ\n");
+        return;
+    }
 
     query = xmlnode_new_child(iq->node, "query");
     xmlnode_set_namespace(query, "http://jabber.org/protocol/bytestreams");
@@ -1083,11 +1110,18 @@ static void
 bonjour_bytestreams_connect_cb(gpointer data, gint source, const gchar *error_message)
 {
   PurpleXfer *xfer = data;
-  XepXfer *xf = xfer->data;
+  XepXfer *xf;
   XepIq *iq;
   xmlnode *q_node, *tmp_node;
   BonjourData *bd;
   gboolean ret = FALSE;
+
+  if (xfer == NULL)
+    return;
+
+  xf = xfer->data;
+  if (xf == NULL)
+    return;
 
   xf->proxy_connection = NULL;
 
@@ -1109,11 +1143,21 @@ bonjour_bytestreams_connect_cb(gpointer data, gint source, const gchar *error_me
   purple_debug_info("barev", "Connected successfully via SOCKS5, starting transfer.\n");
 
   bd = xf->data;
+  if (bd == NULL) {
+    purple_xfer_cancel_local(xfer);
+    return;
+  }
 
   /* Here, start the file transfer.*/
 
   /* Notify Initiator of Connection */
   iq = xep_iq_new(bd, XEP_IQ_RESULT, xfer->who, bonjour_get_jid(bd->jabber_data->account), xf->iq_id);
+  if (iq == NULL) {
+    purple_debug_error("barev",
+                       "bytestreams-connect: failed to build confirmation IQ\n");
+    purple_xfer_cancel_local(xfer);
+    return;
+  }
   q_node = xmlnode_new_child(iq->node, "query");
   xmlnode_set_namespace(q_node, "http://jabber.org/protocol/bytestreams");
   tmp_node = xmlnode_new_child(q_node, "streamhost-used");
