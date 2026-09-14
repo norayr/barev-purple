@@ -471,6 +471,12 @@ jingle_rtp_init_media(JingleContent *content)
 		return FALSE;
 	}
 
+	/* Barev runs over Yggdrasil, which is already end-to-end encrypted.
+	 * Explicitly disable SRTP; newer Farstream defaults to require-encryption
+	 * and the pipeline fails to build because we do not negotiate crypto
+	 * (no <crypto>/DTLS-SRTP support in this Jingle stack). */
+	purple_media_set_require_encryption(media, name, remote_jid, FALSE);
+
 	g_free(name);
 	g_free(media_type);
 	g_free(remote_jid);
