@@ -10,6 +10,9 @@ PLUGIN_DIR := $(shell pkg-config --variable=plugindir purple)
 DATADIR := $(shell pkg-config --variable=datadir purple)
 ICON_DIR := $(DATADIR)/pixmaps/pidgin/protocols
 
+# Static Barev protocol metadata consumed by Mission Control before Haze starts.
+TELEPATHY_MANAGER_DIR ?= /usr/share/telepathy/managers
+
 # Dependencies via pkg-config
 PURPLE_CFLAGS  := $(shell pkg-config --cflags purple)
 PURPLE_LIBS    := $(shell pkg-config --libs purple)
@@ -100,6 +103,8 @@ $(PLUGIN): $(OBJS)
 install: $(PLUGIN)
 	install -d "$(DESTDIR)$(PLUGIN_DIR)"
 	install -m 644 $(PLUGIN) "$(DESTDIR)$(PLUGIN_DIR)"
+	install -d "$(DESTDIR)$(TELEPATHY_MANAGER_DIR)"
+	install -m 644 haze.manager "$(DESTDIR)$(TELEPATHY_MANAGER_DIR)/haze.manager"
 	install -d "$(DESTDIR)$(ICON_DIR)/16"
 	install -d "$(DESTDIR)$(ICON_DIR)/22"
 	install -d "$(DESTDIR)$(ICON_DIR)/48"
@@ -111,6 +116,7 @@ install: $(PLUGIN)
 
 uninstall:
 	rm -f "$(DESTDIR)$(PLUGIN_DIR)/$(PLUGIN)"
+	rm -f "$(DESTDIR)$(TELEPATHY_MANAGER_DIR)/haze.manager"
 	rm -f "$(DESTDIR)$(ICON_DIR)/16/barev.png"
 	rm -f "$(DESTDIR)$(ICON_DIR)/22/barev.png"
 	rm -f "$(DESTDIR)$(ICON_DIR)/48/barev.png"

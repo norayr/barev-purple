@@ -1391,10 +1391,14 @@ barev_get_media_caps(PurpleAccount *account, const char *who)
 
   if (!pb) return PURPLE_MEDIA_CAPS_NONE;
   bb = purple_buddy_get_protocol_data(pb);
-  if (!bb || !bb->conversation || !bb->conversation->recv_stream_start)
+  if (!bb || !bb->ips || !bb->ips->data)
     return PURPLE_MEDIA_CAPS_NONE;
 
-  return PURPLE_MEDIA_CAPS_AUDIO | PURPLE_MEDIA_CAPS_AUDIO_VIDEO;
+  /* Capabilities describe the configured peer, not whether its auto-connect
+   * stream happened to be established when Haze queried the contact. Haze
+   * maps AUDIO and VIDEO individually; AUDIO_VIDEO does not imply VIDEO. */
+  return PURPLE_MEDIA_CAPS_AUDIO | PURPLE_MEDIA_CAPS_VIDEO |
+         PURPLE_MEDIA_CAPS_AUDIO_VIDEO;
 }
 #endif /* USE_VV */
 
