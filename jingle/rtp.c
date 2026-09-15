@@ -18,14 +18,25 @@
 #include "session.h"
 #include "debug.h"
 
-#include <gst/gst.h>
+#include <farstream/fs-candidate.h>
 
+#include <errno.h>
+#include <fcntl.h>
 #include <string.h>
+#include <unistd.h>
+
+#define BAREV_SRTP_KEY_LEN 30
+#define BAREV_SRTP_CIPHER "aes-128-icm"
+#define BAREV_SRTP_AUTH "hmac-sha1-80"
+#define BAREV_SRTP_SUITE "AES_CM_128_HMAC_SHA1_80"
 
 struct _JingleRtpPrivate
 {
 	gchar *media_type;
 	gchar *ssrc;
+	guint8 local_key[BAREV_SRTP_KEY_LEN];
+	gboolean has_local_key;
+	gchar *crypto_tag;
 };
 
 #define JINGLE_RTP_GET_PRIVATE(obj) \
@@ -106,6 +117,8 @@ jingle_rtp_finalize(GObject *rtp)
 	purple_debug_info("jingle-rtp", "jingle_rtp_finalize\n");
 	g_free(priv->media_type);
 	g_free(priv->ssrc);
+	g_free(priv->crypto_tag);
+	memset(priv->local_key, 0, sizeof(priv->local_key));
 	G_OBJECT_CLASS(parent_class)->finalize(rtp);
 }
 
@@ -199,6 +212,35 @@ jingle_rtp_candidate_to_rawudp(guint generation, PurpleMediaCandidate *candidate
 	return rawudp_candidate;
 }
 
+static gboolean
+jingle_rtp_random_bytes(guint8 *buffer, gsize length)
+{
+	gsize offset = 0;
+	int fd = open("/dev/urandom", O_RDONLY);
+
+	if (fd < 0) {
+		purple_debug_error("jingle-rtp", "cannot open /dev/urandom: %s\n",
+				g_strerror(errno));
+		return FALSE;
+	}
+
+	while (offset < length) {
+		ssize_t count = read(fd, buffer + offset, length - offset);
+		if (count < 0 && errno == EINTR)
+			continue;
+		if (count <= 0) {
+			purple_debug_error("jingle-rtp", "cannot read /dev/urandom: %s\n",
+					count < 0 ? g_strerror(errno) : "unexpected EOF");
+			close(fd);
+			return FALSE;
+		}
+		offset += count;
+	}
+
+	close(fd);
+	return TRUE;
+}
+
 static JingleTransport *
 jingle_rtp_candidates_to_transport(guint generation, GList *candidates)
 {
@@ -224,7 +266,7 @@ jingle_rtp_transport_to_candidates(JingleTransport *transport)
 		JingleRawUdpCandidate *candidate = candidates->data;
 		ret = g_list_append(ret, purple_media_candidate_new(
 				"", candidate->component,
-				PURPLE_MEDIA_CANDIDATE_TYPE_SRFLX,
+				PURPLE_MEDIA_CANDIDATE_TYPE_HOST,
 				PURPLE_MEDIA_NETWORK_PROTOCOL_UDP,
 				candidate->ip, candidate->port));
 	}
@@ -376,87 +418,12 @@ jingle_rtp_ready(JingleSession *session)
 	}
 }
 
-/* Newer Farstream (>= 0.2.9) sets GstRtpBin's rtp-profile to a Secure profile
- * (SAVP/SAVPF) even when require-encryption is FALSE, causing rtpbin to insert
- * SrtpEnc/SrtpDec into the pipeline.  With no crypto keys they fail to init
- * and kill the call.  Barev runs over Yggdrasil (already end-to-end
- * encrypted) so SRTP is redundant here; force rtpbin back to AVP as soon as
- * it appears, before it wires up the SRTP elements.  As a fallback also
- * neuter any SrtpEnc/SrtpDec that still get added: their cipher/auth enums
- * accept 0 == null, which makes them behave as passthrough. */
-#define BAREV_GST_RTP_PROFILE_AVP 1
-static void
-barev_srtp_neuter_deep_element_added(GstBin *pipeline, GstBin *sub_bin,
-		GstElement *element, gpointer user_data)
-{
-	GstElementFactory *factory = gst_element_get_factory(element);
-	const gchar *fname;
-
-	(void)pipeline; (void)sub_bin; (void)user_data;
-
-	if (factory == NULL)
-		return;
-
-	fname = gst_plugin_feature_get_name(GST_PLUGIN_FEATURE(factory));
-	if (fname == NULL)
-		return;
-
-	if (g_str_equal(fname, "rtpbin") || g_str_equal(fname, "rtpsession")) {
-		/* Force plain AVP so rtpbin never even adds srtpenc/srtpdec. */
-		if (g_object_class_find_property(G_OBJECT_GET_CLASS(element),
-				"rtp-profile") != NULL) {
-			purple_debug_info("jingle-rtp",
-					"forcing %s rtp-profile to AVP\n", fname);
-			g_object_set(element, "rtp-profile",
-					BAREV_GST_RTP_PROFILE_AVP, NULL);
-		}
-	}
-
-	if (g_str_equal(fname, "srtpenc")) {
-		purple_debug_info("jingle-rtp",
-				"neutering srtpenc (fallback, forcing passthrough)\n");
-		g_object_set(element,
-				"rtp-cipher",  0,
-				"rtcp-cipher", 0,
-				"rtp-auth",    0,
-				"rtcp-auth",   0,
-				NULL);
-	}
-	/* srtpdec has no rtp-cipher property; it derives everything from caps.
-	 * Forcing AVP on rtpbin should keep it out of the pipeline entirely. */
-}
-
-static void
-barev_srtp_neuter_install(void)
-{
-	static gboolean installed = FALSE;
-	GstElement *pipeline;
-
-	if (installed)
-		return;
-
-	pipeline = purple_media_manager_get_pipeline(purple_media_manager_get());
-	if (pipeline == NULL) {
-		purple_debug_warning("jingle-rtp",
-				"no media pipeline yet, cannot install SRTP neuter\n");
-		return;
-	}
-
-	g_signal_connect(pipeline, "deep-element-added",
-			G_CALLBACK(barev_srtp_neuter_deep_element_added), NULL);
-	installed = TRUE;
-	purple_debug_info("jingle-rtp", "SRTP neuter installed on pipeline %p\n",
-			pipeline);
-}
-
 static PurpleMedia *
 jingle_rtp_create_media(JingleContent *content)
 {
 	JingleSession *session = jingle_content_get_session(content);
 	BonjourJabberConversation *bconv = jingle_session_get_bconv(session);
 	gchar *remote_jid = jingle_session_get_remote_jid(session);
-
-	barev_srtp_neuter_install();
 
 	PurpleMedia *media = purple_media_manager_create_media(
 			purple_media_manager_get(),
@@ -487,20 +454,146 @@ jingle_rtp_create_media(JingleContent *content)
 }
 
 static gboolean
+jingle_rtp_set_local_crypto(JingleContent *content, PurpleMedia *media,
+		const gchar *name, const gchar *remote_jid)
+{
+	JingleRtpPrivate *priv = JINGLE_RTP(content)->priv;
+	gboolean encrypted, required;
+
+	if (!priv->has_local_key) {
+		if (!jingle_rtp_random_bytes(priv->local_key,
+					sizeof(priv->local_key)))
+			return FALSE;
+		priv->has_local_key = TRUE;
+	}
+	if (priv->crypto_tag == NULL)
+		priv->crypto_tag = g_strdup("1");
+
+	encrypted = purple_media_set_encryption_parameters(media, name,
+			BAREV_SRTP_CIPHER, BAREV_SRTP_AUTH,
+			(const gchar *)priv->local_key, sizeof(priv->local_key));
+	required = purple_media_set_require_encryption(media, name, remote_jid, TRUE);
+	purple_debug_info("jingle-rtp",
+			"local SRTP parameters: encryption=%d required=%d\n",
+			encrypted, required);
+	return encrypted && required;
+}
+
+static gboolean
+jingle_rtp_set_remote_crypto(JingleContent *content, xmlnode *description)
+{
+	xmlnode *encryption, *crypto;
+	const gchar *suite = NULL, *key_params = NULL, *tag = NULL;
+	const gchar *encoded;
+	gchar *encoded_key;
+	guchar *key;
+	gsize encoded_len, key_len;
+	JingleSession *session;
+	JingleRtpPrivate *priv = JINGLE_RTP(content)->priv;
+	PurpleMedia *media;
+	gchar *name, *remote_jid;
+	gboolean result;
+
+	if (description == NULL ||
+			(encryption = xmlnode_get_child(description, "encryption")) == NULL) {
+		purple_debug_error("jingle-rtp", "peer did not offer required SRTP\n");
+		return FALSE;
+	}
+
+	for (crypto = xmlnode_get_child(encryption, "crypto"); crypto;
+			crypto = xmlnode_get_next_twin(crypto)) {
+		suite = xmlnode_get_attrib(crypto, "crypto-suite");
+		key_params = xmlnode_get_attrib(crypto, "key-params");
+		tag = xmlnode_get_attrib(crypto, "tag");
+		if (suite != NULL &&
+				g_ascii_strcasecmp(suite, BAREV_SRTP_SUITE) == 0 &&
+				key_params != NULL && g_str_has_prefix(key_params, "inline:") &&
+				tag != NULL && *tag != '\0')
+			break;
+	}
+
+	if (crypto == NULL) {
+		purple_debug_error("jingle-rtp", "peer offered unsupported SRTP parameters\n");
+		return FALSE;
+	}
+
+	session = jingle_content_get_session(content);
+	if (jingle_session_is_initiator(session)) {
+		if (!purple_strequal(tag, priv->crypto_tag)) {
+			purple_debug_error("jingle-rtp",
+					"peer selected unexpected SRTP tag %s\n", tag);
+			g_object_unref(session);
+			return FALSE;
+		}
+	} else {
+		g_free(priv->crypto_tag);
+		priv->crypto_tag = g_strdup(tag);
+	}
+
+	encoded = key_params + strlen("inline:");
+	if (strchr(encoded, '|') != NULL) {
+		purple_debug_error("jingle-rtp",
+				"SRTP lifetime and MKI parameters are not supported\n");
+		g_object_unref(session);
+		return FALSE;
+	}
+	encoded_len = strcspn(encoded, "|");
+	encoded_key = g_strndup(encoded, encoded_len);
+	key = g_base64_decode(encoded_key, &key_len);
+	g_free(encoded_key);
+	if (key_len != BAREV_SRTP_KEY_LEN) {
+		purple_debug_error("jingle-rtp", "peer SRTP key has invalid length %lu\n",
+				(unsigned long)key_len);
+		g_free(key);
+		g_object_unref(session);
+		return FALSE;
+	}
+
+	media = jingle_rtp_get_media(session);
+	name = jingle_content_get_name(content);
+	remote_jid = jingle_session_get_remote_jid(session);
+	result = purple_media_set_decryption_parameters(media, name, remote_jid,
+			BAREV_SRTP_CIPHER, BAREV_SRTP_AUTH, (const gchar *)key, key_len);
+	purple_debug_info("jingle-rtp", "remote SRTP parameters: decryption=%d\n",
+			result);
+
+	memset(key, 0, key_len);
+	g_free(key);
+	g_free(remote_jid);
+	g_free(name);
+	g_object_unref(session);
+	return result;
+}
+
+static gboolean
 jingle_rtp_init_media(JingleContent *content)
 {
 	JingleSession *session = jingle_content_get_session(content);
+	BonjourJabberConversation *bconv = jingle_session_get_bconv(session);
 	PurpleMedia *media = jingle_rtp_get_media(session);
 	gchar *creator, *media_type, *remote_jid, *senders, *name;
 	const gchar *transmitter;
 	gboolean is_audio, is_creator;
 	PurpleMediaSessionType type;
 	JingleTransport *transport;
+	GParameter param = { 0 };
+	GList *preferred_candidates = NULL;
+	guint num_params = 0;
+	gboolean stream_added;
+
+	if (bconv->local_ip == NULL || *bconv->local_ip == '\0') {
+		purple_debug_error("jingle-rtp",
+				"cannot start media without a local Yggdrasil address\n");
+		g_object_unref(session);
+		return FALSE;
+	}
 
 	if (media == NULL) {
 		media = jingle_rtp_create_media(content);
-		if (media == NULL)
+		if (media == NULL) {
+			g_object_unref(session);
 			return FALSE;
+		}
 	}
 
 	name       = jingle_content_get_name(content);
@@ -541,44 +634,36 @@ jingle_rtp_init_media(JingleContent *content)
 			!jingle_session_is_initiator(session);
 	g_free(creator);
 
-	if (!purple_media_add_stream(media, name, remote_jid,
-			type, is_creator, transmitter, 0, NULL)) {
+	preferred_candidates = g_list_append(preferred_candidates,
+			fs_candidate_new("", FS_COMPONENT_RTP, FS_CANDIDATE_TYPE_HOST,
+					FS_NETWORK_PROTOCOL_UDP, bconv->local_ip, 0));
+	preferred_candidates = g_list_append(preferred_candidates,
+			fs_candidate_new("", FS_COMPONENT_RTCP, FS_CANDIDATE_TYPE_HOST,
+					FS_NETWORK_PROTOCOL_UDP, bconv->local_ip, 0));
+	param.name = "preferred-local-candidates";
+	g_value_init(&param.value, FS_TYPE_CANDIDATE_LIST);
+	g_value_set_static_boxed(&param.value, preferred_candidates);
+	num_params = 1;
+	purple_debug_info("jingle-rtp", "binding media to Yggdrasil address %s\n",
+			bconv->local_ip);
+
+	stream_added = purple_media_add_stream(media, name, remote_jid,
+			type, is_creator, transmitter, num_params, &param);
+	g_value_unset(&param.value);
+	fs_candidate_list_destroy(preferred_candidates);
+	if (!stream_added) {
 		purple_media_end(media, NULL, NULL);
 		g_free(name); g_free(media_type); g_free(remote_jid);
 		g_free(senders); g_object_unref(session);
 		return FALSE;
 	}
 
-	/* Barev runs over Yggdrasil, which is already end-to-end encrypted.
-	 * We would prefer plain RTP, but newer Farstream/GstRtpBin always inserts
-	 * GstSrtpEnc into the pipeline regardless of rtp-profile or
-	 * require-encryption, and srtpenc fails to init without a key.  Rather
-	 * than fight the pipeline, feed both peers a fixed SRTP master key so
-	 * srtpenc initialises cleanly.  This adds no real confidentiality (the
-	 * key is public in our source), but Yggdrasil below already provides
-	 * transport-level encryption, so nothing is lost. */
-	{
-		static const guint8 barev_fixed_srtp_key[30] = {
-			0xba, 0x8e, 0x8b, 0xa8, 0xef, 0xe6, 0x82, 0x0e,
-			0x9d, 0x7f, 0x94, 0x2c, 0x33, 0x11, 0xcd, 0x5a,
-			0x77, 0x42, 0x1e, 0xf0, 0x64, 0x03, 0x99, 0x2b,
-			0x18, 0xd4, 0x50, 0xa5, 0xc9, 0x71
-		};
-		gboolean re, se, sd;
-		re = purple_media_set_require_encryption(media, name,
-				remote_jid, FALSE);
-		se = purple_media_set_encryption_parameters(media, name,
-				"aes-128-icm", "hmac-sha1-80",
-				(const gchar *)barev_fixed_srtp_key,
-				sizeof(barev_fixed_srtp_key));
-		sd = purple_media_set_decryption_parameters(media, name,
-				remote_jid,
-				"aes-128-icm", "hmac-sha1-80",
-				(const gchar *)barev_fixed_srtp_key,
-				sizeof(barev_fixed_srtp_key));
-		purple_debug_info("jingle-rtp",
-				"require_encryption -> %d, encrypt_params -> %d, decrypt_params -> %d\n",
-				re, se, sd);
+	if (!jingle_rtp_set_local_crypto(content, media, name, remote_jid)) {
+		purple_debug_error("jingle-rtp", "could not configure local SRTP\n");
+		purple_media_end(media, NULL, NULL);
+		g_free(name); g_free(media_type); g_free(remote_jid);
+		g_free(senders); g_object_unref(session);
+		return FALSE;
 	}
 
 	g_free(name);
@@ -713,6 +798,23 @@ jingle_rtp_to_xml_internal(JingleContent *rtp, xmlnode *content,
 		g_object_unref(session);
 
 		jingle_rtp_add_payloads(description, codecs);
+		if ((action == JINGLE_SESSION_INITIATE ||
+				action == JINGLE_SESSION_ACCEPT) &&
+				JINGLE_RTP(rtp)->priv->has_local_key) {
+			gchar *key = g_base64_encode(JINGLE_RTP(rtp)->priv->local_key,
+					BAREV_SRTP_KEY_LEN);
+			gchar *key_params = g_strdup_printf("inline:%s", key);
+			xmlnode *encryption = xmlnode_new_child(description, "encryption");
+			xmlnode *crypto = xmlnode_new_child(encryption, "crypto");
+
+			xmlnode_set_attrib(encryption, "required", "1");
+			xmlnode_set_attrib(crypto, "crypto-suite", BAREV_SRTP_SUITE);
+			xmlnode_set_attrib(crypto, "key-params", key_params);
+			xmlnode_set_attrib(crypto, "tag",
+					JINGLE_RTP(rtp)->priv->crypto_tag);
+			g_free(key_params);
+			g_free(key);
+		}
 		purple_media_codec_list_free(codecs);
 	}
 	return node;
@@ -742,6 +844,7 @@ jingle_rtp_handle_action_internal(JingleContent *content, xmlnode *xmlcontent,
 						session, "general-error");
 				bonjour_jabber_send_xml(bconv, iq);
 				xmlnode_free(iq);
+				jingle_session_unregister(session);
 				g_object_unref(session);
 				break;
 			}
@@ -755,7 +858,44 @@ jingle_rtp_handle_action_internal(JingleContent *content, xmlnode *xmlcontent,
 			remote_jid = jingle_session_get_remote_jid(session);
 
 			media = jingle_rtp_get_media(session);
-			purple_media_set_remote_codecs(media, name, remote_jid, codecs);
+			if (!jingle_rtp_set_remote_crypto(content, description)) {
+				BonjourJabberConversation *bconv =
+						jingle_session_get_bconv(session);
+				xmlnode *iq = jingle_session_terminate_packet(
+						session, "security-error");
+				bonjour_jabber_send_xml(bconv, iq);
+				xmlnode_free(iq);
+				purple_media_end(media, NULL, NULL);
+				jingle_session_unregister(session);
+				g_free(remote_jid);
+				g_free(name);
+				g_object_unref(session);
+				g_object_unref(transport);
+				purple_media_codec_list_free(codecs);
+				purple_media_candidate_list_free(candidates);
+				break;
+			}
+
+			if (!purple_media_set_remote_codecs(media, name,
+					remote_jid, codecs)) {
+				BonjourJabberConversation *bconv =
+						jingle_session_get_bconv(session);
+				xmlnode *iq = jingle_session_terminate_packet(
+						session, "failed-application");
+				purple_debug_error("jingle-rtp",
+						"could not set remote codecs for %s\n", name);
+				bonjour_jabber_send_xml(bconv, iq);
+				xmlnode_free(iq);
+				purple_media_end(media, NULL, NULL);
+				jingle_session_unregister(session);
+				g_free(remote_jid);
+				g_free(name);
+				g_object_unref(session);
+				g_object_unref(transport);
+				purple_media_codec_list_free(codecs);
+				purple_media_candidate_list_free(candidates);
+				break;
+			}
 			purple_media_add_remote_candidates(media, name, remote_jid,
 					candidates);
 
@@ -857,7 +997,8 @@ jingle_rtp_initiate_media(BonjourJabberConversation *bconv, const gchar *who,
 				"session", "audio-session", "both", transport);
 		jingle_session_add_content(session, content);
 		JINGLE_RTP(content)->priv->media_type = g_strdup("audio");
-		jingle_rtp_init_media(content);
+		if (!jingle_rtp_init_media(content))
+			goto out;
 	}
 	if (type & PURPLE_MEDIA_VIDEO) {
 		transport = jingle_transport_create(JINGLE_TRANSPORT_RAWUDP);
@@ -865,7 +1006,12 @@ jingle_rtp_initiate_media(BonjourJabberConversation *bconv, const gchar *who,
 				"session", "video-session", "both", transport);
 		jingle_session_add_content(session, content);
 		JINGLE_RTP(content)->priv->media_type = g_strdup("video");
-		jingle_rtp_init_media(content);
+		if (!jingle_rtp_init_media(content)) {
+			PurpleMedia *media = jingle_rtp_get_media(session);
+			if (media != NULL)
+				purple_media_end(media, NULL, NULL);
+			goto out;
+		}
 	}
 
 	if (jingle_rtp_get_media(session) == NULL)
@@ -873,6 +1019,8 @@ jingle_rtp_initiate_media(BonjourJabberConversation *bconv, const gchar *who,
 
 	ret = TRUE;
 out:
+	if (!ret)
+		g_object_unref(session);
 	g_free(me);
 	g_free(sid);
 	return ret;

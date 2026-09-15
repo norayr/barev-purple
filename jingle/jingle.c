@@ -189,9 +189,18 @@ jingle_handle_session_accept(JingleSession *session, xmlnode *jingle)
 			jingle_send_and_free(session,
 					jingle_session_terminate_packet(session,
 					"unsupported-applications"));
+			jingle_session_handle_action(session, jingle,
+					JINGLE_SESSION_TERMINATE);
+			jingle_session_unregister(session);
+			g_object_unref(session);
+			return;
 		} else {
 			jingle_content_handle_action(parsed_content, content,
 					JINGLE_SESSION_ACCEPT);
+			if (!jingle_session_is_registered(session)) {
+				g_object_unref(session);
+				return;
+			}
 		}
 	}
 }
@@ -206,6 +215,7 @@ static void
 jingle_handle_session_initiate(JingleSession *session, xmlnode *jingle)
 {
 	xmlnode *content = xmlnode_get_child(jingle, "content");
+	jingle_send_and_free(session, jingle_session_create_ack(session, jingle));
 
 	for (; content; content = xmlnode_get_next_twin(content)) {
 		JingleContent *parsed_content = jingle_content_parse(content);
@@ -214,13 +224,21 @@ jingle_handle_session_initiate(JingleSession *session, xmlnode *jingle)
 			jingle_send_and_free(session,
 					jingle_session_terminate_packet(session,
 					"unsupported-applications"));
+			jingle_session_handle_action(session, jingle,
+					JINGLE_SESSION_TERMINATE);
+			jingle_session_unregister(session);
+			g_object_unref(session);
+			return;
 		} else {
 			jingle_session_add_content(session, parsed_content);
 			jingle_content_handle_action(parsed_content, content,
 					JINGLE_SESSION_INITIATE);
+			if (!jingle_session_is_registered(session)) {
+				g_object_unref(session);
+				return;
+			}
 		}
 	}
-	jingle_send_and_free(session, jingle_session_create_ack(session, jingle));
 }
 
 static void
@@ -385,20 +403,23 @@ barev_jingle_parse(BonjourJabberConversation *bconv, const char *from,
 	jingle_actions[action_type].handler(session, jingle);
 }
 
-static void
-jingle_terminate_sessions_gh(gpointer key, gpointer value, gpointer user_data)
-{
-	(void)key; (void)user_data;
-	g_object_unref((JingleSession *)value);
-}
-
 void
 barev_jingle_terminate_sessions(BonjourJabberConversation *bconv)
 {
 	if (bconv->jingle_sessions) {
-		g_hash_table_foreach(bconv->jingle_sessions,
-				jingle_terminate_sessions_gh, NULL);
-		/* finalize callbacks remove entries; destroy the table afterwards */
+		GList *iter, *sessions = g_hash_table_get_values(bconv->jingle_sessions);
+
+		for (iter = sessions; iter; iter = iter->next)
+			g_object_ref(iter->data);
+		for (iter = sessions; iter; iter = iter->next) {
+			JingleSession *session = iter->data;
+			jingle_session_handle_action(session, NULL,
+					JINGLE_SESSION_TERMINATE);
+			jingle_session_unregister(session);
+			g_object_unref(session);
+			g_object_unref(session);
+		}
+		g_list_free(sessions);
 		g_hash_table_destroy(bconv->jingle_sessions);
 		bconv->jingle_sessions = NULL;
 	}
