@@ -925,9 +925,22 @@ bonjour_login_barev(PurpleAccount *account)
    * empty blist, making the initial Telepathy contact list empty. */
   purple_connection_set_state(gc, PURPLE_CONNECTED);
 
+#ifdef USE_VV
+  /* Seed Purple's buddy capability cache after Haze is connected. Clients
+   * such as osso-addressbook may otherwise retain the zero capabilities they
+   * observed while the roster was being constructed. */
+  buddies = purple_find_buddies(account, NULL);
+  for (GSList *l = buddies; l; l = l->next) {
+    PurpleBuddy *buddy = l->data;
+    purple_prpl_got_media_caps(account, purple_buddy_get_name(buddy));
+  }
+  g_slist_free(buddies);
+#endif
+
   purple_debug_info("barev", "=== BAREV MODE READY ===\n");
 
-  /* 5. Start auto-connect timer: keep streams up while reachable */
+  /* 5. Connect once now, then keep streams up while peers are reachable. */
+  barev_auto_connect_timer(gc);
   bd->reconnect_timer = purple_timeout_add_seconds(30,
                                                    barev_auto_connect_timer,
                                                    gc);
