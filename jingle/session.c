@@ -313,6 +313,22 @@ jingle_session_find_by_sid(BonjourJabberConversation *bconv, const gchar *sid)
 	return session;
 }
 
+gboolean
+jingle_session_is_registered(JingleSession *session)
+{
+	JingleSessionPrivate *priv = session->priv;
+	return priv->bconv->jingle_sessions != NULL &&
+			g_hash_table_lookup(priv->bconv->jingle_sessions, priv->sid) == session;
+}
+
+void
+jingle_session_unregister(JingleSession *session)
+{
+	if (jingle_session_is_registered(session))
+		g_hash_table_remove(session->priv->bconv->jingle_sessions,
+				session->priv->sid);
+}
+
 static gboolean
 find_by_jid_ghr(gpointer key, gpointer value, gpointer user_data)
 {

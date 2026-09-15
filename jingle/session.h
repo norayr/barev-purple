@@ -61,6 +61,8 @@ GList *jingle_session_get_pending_contents(JingleSession *session);
 
 JingleSession *jingle_session_find_by_sid(BonjourJabberConversation *bconv, const gchar *sid);
 JingleSession *jingle_session_find_by_jid(BonjourJabberConversation *bconv, const gchar *jid);
+gboolean jingle_session_is_registered(JingleSession *session);
+void jingle_session_unregister(JingleSession *session);
 
 /* Returns a new <iq type='result'> node (caller must xmlnode_free after sending) */
 xmlnode *jingle_session_create_ack(JingleSession *session, const xmlnode *jingle);

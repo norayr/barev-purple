@@ -25,9 +25,19 @@ LIBXML_LIBS    := $(shell pkg-config --libs libxml-2.0)
 # Gentoo ebuilds: USE="gstreamer" → emake USE_VV=1; without → emake USE_VV=0.
 ifeq ($(origin USE_VV), undefined)
   GST_CFLAGS := $(shell pkg-config --cflags gstreamer-1.0 2>/dev/null)
-  ifneq ($(GST_CFLAGS),)
+  FARSTREAM_CFLAGS := $(shell pkg-config --cflags farstream-0.2 2>/dev/null)
+  ifneq ($(strip $(GST_CFLAGS)$(FARSTREAM_CFLAGS)),)
+    ifneq ($(GST_CFLAGS),)
+      ifneq ($(FARSTREAM_CFLAGS),)
     USE_VV   := 1
     GST_LIBS := $(shell pkg-config --libs gstreamer-1.0 2>/dev/null)
+    FARSTREAM_LIBS := $(shell pkg-config --libs farstream-0.2 2>/dev/null)
+      else
+        USE_VV := 0
+      endif
+    else
+      USE_VV := 0
+    endif
   else
     USE_VV   := 0
   endif
@@ -38,8 +48,12 @@ ifeq ($(USE_VV), 1)
     GST_CFLAGS := $(shell pkg-config --cflags gstreamer-1.0)
     GST_LIBS   := $(shell pkg-config --libs   gstreamer-1.0)
   endif
-  CFLAGS       += $(GST_CFLAGS) -DUSE_VV
-  LDLIBS_EXTRA  = $(GST_LIBS)
+  ifndef FARSTREAM_CFLAGS
+    FARSTREAM_CFLAGS := $(shell pkg-config --cflags farstream-0.2)
+    FARSTREAM_LIBS   := $(shell pkg-config --libs   farstream-0.2)
+  endif
+  CFLAGS       += $(GST_CFLAGS) $(FARSTREAM_CFLAGS) -DUSE_VV
+  LDLIBS_EXTRA  = $(GST_LIBS) $(FARSTREAM_LIBS)
 else
   LDLIBS_EXTRA  =
 endif
@@ -106,4 +120,3 @@ clean:
 	rm -f $(OBJS) $(PLUGIN)
 docs:
 	pandoc -o barev.pdf barev.md --pdf-engine=xelatex  -V geometry:margin=1in
-
