@@ -741,7 +741,7 @@ xep_bytestreams_parse(PurpleConnection *pc, xmlnode *packet, PurpleBuddy *pb)
   type = xmlnode_get_attrib(packet, "type");
   from = purple_buddy_get_name(pb);
   query = xmlnode_get_child(packet,"query");
-  if(!type)
+  if(!type || !query)
     return;
 
   query = xmlnode_copy(query);
