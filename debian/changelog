@@ -4,6 +4,7 @@ barev-purple (2.14) unstable; urgency=medium
   * publishing streamed media capabilities through telepathy haze.
   * deferring offline presence during transient stream replacement.
   * sharing desktop and maemo build rules with platform icon selection.
+  * enabling haze manager metadata installation for maemo packages.
 
  -- Norayr Chilingarian <norayr@arnet.am>  Sat, 19 Sep 2026 00:00:00 +0000
 
