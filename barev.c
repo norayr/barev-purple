@@ -972,6 +972,7 @@ bonjour_close(PurpleConnection *connection)
       barev_save_ip_to_account(account, purple_buddy_get_name(pb),
                                (const char *)bb->ips->data, bb->port_p2pj);
     }
+    bonjour_buddy_cancel_deferred_offline(bb);
     purple_prpl_got_user_status(account,
                                 purple_buddy_get_name(pb),
                                 BONJOUR_STATUS_ID_OFFLINE, NULL);
@@ -981,14 +982,21 @@ bonjour_close(PurpleConnection *connection)
    * its ephemeral MC store between sessions. */
   barev_save_persistent_contacts(account);
 
-  g_slist_free(buddies);
-
   /* Barev-only: just stop Jabber listener, no mDNS */
   if (bd != NULL && bd->jabber_data != NULL)
   {
     bonjour_jabber_stop(bd->jabber_data);
     g_free(bd->jabber_data);
   }
+
+  /* Stopping the listener closes active streams.  Do not leave their
+   * deferred-offline callbacks alive after the account has shut down. */
+  for (iter = buddies; iter; iter = iter->next) {
+    PurpleBuddy *pb = (PurpleBuddy *)iter->data;
+    bonjour_buddy_cancel_deferred_offline(
+        purple_buddy_get_protocol_data(pb));
+  }
+  g_slist_free(buddies);
 
   if (bd != NULL && bd->reconnect_timer != 0) {
     purple_timeout_remove(bd->reconnect_timer);

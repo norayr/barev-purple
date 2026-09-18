@@ -13,20 +13,41 @@ If you're on Gentoo, just add [my overlay](https://github.com/norayr/norayr-over
 ## Requirements
 
 You need Pidgin (libpurple) development headers and common build tools.
+GStreamer and Farstream development headers are required to build voice/video
+support.
 
 ## Dependencies
 
 On Gentoo: net-im/pidgin, dev-libs/libxml2
 
-On Debian: libpurple-dev, libxml2-dev
+On Debian and derivatives, install the build dependencies with:
+
+```sh
+sudo apt install build-essential pkg-config libpurple-dev libglib2.0-dev \
+  libxml2-dev libgstreamer1.0-dev libfarstream-0.2-dev
+```
+
+For voice/video at runtime, the usual GStreamer plugins are recommended:
+
+```sh
+sudo apt install gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+  gstreamer1.0-plugins-bad gstreamer1.0-pulseaudio
+```
+
+Telepathy-Farstream and Telepathy-Haze are not required for a regular
+Pidgin/libpurple installation.
 
 ## Actual build
 
 ```
 git clone https://github.com/norayr/barev
 cd barev
-make
+make USE_VV=1
 ```
+
+Voice/video support is enabled automatically when both GStreamer and Farstream
+are found. Use `USE_VV=1` to require it, or `USE_VV=0` to build messaging and
+file-transfer support only.
 
 then
 ```
@@ -80,13 +101,11 @@ Currently, if you want to change your contact's port, you need to
 * statuses: available, away, do not disturb, status lines.
 * avatars (XEP-0153)
 * Chat State Notification (XEP-0085) - a bit of composing events.
+* Jingle RTP audio/video calls when built with `USE_VV=1`.
 
 # What does not work
 
-but nice to have
-
-audio/video.
-no mucs.
+* Multi-user chats.
 
 # Dreams
 
@@ -450,4 +469,3 @@ Client A                                  Client B
 3. Any other XEPs
 
 ---
-
