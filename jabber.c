@@ -1253,6 +1253,7 @@ _bonjour_handle_presence(PurpleBuddy *pb, xmlnode *presence_node)
     /* unavailable => offline */
     type = xmlnode_get_attrib(presence_node, "type");
     if (type && !g_ascii_strcasecmp(type, "unavailable")) {
+        bonjour_buddy_cancel_deferred_offline(bb);
         safe_set_buddy_status(account, name, BONJOUR_STATUS_ID_OFFLINE, NULL, NULL);
         purple_prpl_got_user_idle(account, name, FALSE, 0);
         return;
@@ -1277,6 +1278,7 @@ _bonjour_handle_presence(PurpleBuddy *pb, xmlnode *presence_node)
     }
 
     if (bb) {
+        bonjour_buddy_cancel_deferred_offline(bb);
         g_free(bb->status);
         bb->status = show_text ? g_strdup(show_text) : NULL;
         g_free(bb->msg);
@@ -2092,6 +2094,7 @@ void bonjour_jabber_stream_started(BonjourJabberConversation *bconv) {
         purple_buddy_get_name(pb), bconv->ping_timer);
 
     if (bb) {
+      bonjour_buddy_cancel_deferred_offline(bb);
       bonjour_jabber_start_ping(bconv);
 #ifdef USE_VV
       purple_prpl_got_media_caps(bconv->account,
@@ -3360,12 +3363,8 @@ bonjour_jabber_close_conversation(BonjourJabberConversation *bconv)
       bb->conversation = NULL;
 
     if (was_current && bconv->account && bconv->account->gc &&
-        PURPLE_CONNECTION_IS_VALID(bconv->account->gc)) {
-      purple_prpl_got_user_status(bconv->account,
-                                  purple_buddy_get_name(pb),
-                                  BONJOUR_STATUS_ID_OFFLINE,
-                                  NULL);
-    }
+        PURPLE_CONNECTION_IS_VALID(bconv->account->gc))
+      bonjour_buddy_defer_offline(bb);
   }
 
   /* Cancel file transfers which have not started yet. */
@@ -3858,5 +3857,3 @@ bonjour_jabber_send_typing(PurpleBuddy *pb, PurpleTypingState state)
     _send_data(pb, xml);
     g_free(xml);
 }
-
-
