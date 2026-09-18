@@ -812,6 +812,11 @@ bonjour_candidate_wins_collision(PurpleBuddy *pb,
     if (existing->closing || existing->close_timeout != 0 || existing->socket < 0)
         return TRUE;
 
+    /* A peer that has sent its stream header is proven usable.  Never reject
+     * it in favor of an outgoing connect which is still waiting for one. */
+    if (existing->recv_stream_start != candidate->recv_stream_start)
+        return candidate->recv_stream_start;
+
     /* Two connections in the same direction are duplicates.  Keep the first
      * one instead of allowing a late callback to replace a working stream. */
     if (existing->incoming == candidate->incoming)
