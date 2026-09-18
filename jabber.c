@@ -62,6 +62,7 @@
 #include "util.h"
 
 #include "jabber.h"
+#include "jingle/jingle.h"
 #include "parser.h"
 #include "barev.h"
 #include "buddy.h"
@@ -521,7 +522,15 @@ barev_handle_vcard_iq(xmlnode *packet, PurpleBuddy *pb)
             BarevVcardReq *r = g_hash_table_lookup(barev_vcard_userinfo, id);
             if (r) {
                 PurpleConnection *gc = purple_account_get_connection(r->account);
-                PurpleNotifyUserInfo *info = purple_notify_user_info_new();
+                PurpleNotifyUserInfo *info;
+
+                if (gc == NULL) {
+                    /* Account went away while the vCard request was in flight. */
+                    g_hash_table_remove(barev_vcard_userinfo, id);
+                    return TRUE;
+                }
+
+                info = purple_notify_user_info_new();
 
                 gchar *fn = NULL;
                 xmlnode *fn_node = xmlnode_get_child(vcard, "FN");
@@ -637,7 +646,10 @@ bonjour_get_conversation_jid(BonjourJabberConversation *bconv)
     } else {
         /* Fallback to account-wide JID */
         const char *global_jid = bonjour_get_jid(bconv->account);
-        g_strlcpy(jid_buf, global_jid, sizeof(jid_buf));
+        if (global_jid && *global_jid)
+            g_strlcpy(jid_buf, global_jid, sizeof(jid_buf));
+        else
+            jid_buf[0] = '\0';
     }
 
     return jid_buf;
@@ -1192,6 +1204,18 @@ bonjour_jabber_process_packet(PurpleBuddy *pb, xmlnode *packet)
         if (barev_handle_vcard_iq(packet, pb))
             return;
 
+        /* Jingle voice/video? */
+        {
+            xmlnode *jingle_node = xmlnode_get_child_with_namespace(
+                    packet, "jingle", "urn:xmpp:jingle:1");
+            if (jingle_node && bb && bb->conversation) {
+                barev_jingle_parse(bb->conversation,
+                        purple_buddy_get_name(pb),
+                        type, id, jingle_node);
+                return;
+            }
+        }
+
         /* Only hand to file-transfer parser if IQ actually has children */
         if (packet->child != NULL) {
             xep_iq_parse(packet, pb);
@@ -1229,6 +1253,7 @@ _bonjour_handle_presence(PurpleBuddy *pb, xmlnode *presence_node)
     /* unavailable => offline */
     type = xmlnode_get_attrib(presence_node, "type");
     if (type && !g_ascii_strcasecmp(type, "unavailable")) {
+        bonjour_buddy_cancel_deferred_offline(bb);
         safe_set_buddy_status(account, name, BONJOUR_STATUS_ID_OFFLINE, NULL, NULL);
         purple_prpl_got_user_idle(account, name, FALSE, 0);
         return;
@@ -1253,6 +1278,7 @@ _bonjour_handle_presence(PurpleBuddy *pb, xmlnode *presence_node)
     }
 
     if (bb) {
+        bonjour_buddy_cancel_deferred_offline(bb);
         g_free(bb->status);
         bb->status = show_text ? g_strdup(show_text) : NULL;
         g_free(bb->msg);
@@ -1617,12 +1643,14 @@ _send_data_write_cb(gpointer data, gint source, PurpleInputCondition cond)
 static gint _send_data(PurpleBuddy *pb, char *message)
 {
   gint ret;
-  int len = strlen(message);
+  int len;
   BonjourBuddy *bb;
   BonjourJabberConversation *bconv;
 
   if (!pb || !message)
     return -1;
+
+  len = strlen(message);
 
   bb = purple_buddy_get_protocol_data(pb);
   if (!bb || !bb->conversation) {
@@ -2066,8 +2094,12 @@ void bonjour_jabber_stream_started(BonjourJabberConversation *bconv) {
         purple_buddy_get_name(pb), bconv->ping_timer);
 
     if (bb) {
-      /* Start ping mechanism */
+      bonjour_buddy_cancel_deferred_offline(bb);
       bonjour_jabber_start_ping(bconv);
+#ifdef USE_VV
+      purple_prpl_got_media_caps(bconv->account,
+                                 purple_buddy_get_name(pb));
+#endif
     }
 
     /* and now the original buffered-send code: */
@@ -2297,6 +2329,12 @@ bonjour_jabber_start(BonjourJabber *jdata)
     int on = 1;
     if (setsockopt(jdata->socket6, IPPROTO_IPV6, IPV6_V6ONLY, &on, sizeof(on)) != 0) {
       purple_debug_error("barev", "couldn't force IPv6\n");
+      close(jdata->socket6);
+      jdata->socket6 = -1;
+      if (jdata->socket != -1) {
+        close(jdata->socket);
+        jdata->socket = -1;
+      }
       return -1;
     }
 #endif
@@ -2696,9 +2734,17 @@ bonjour_jabber_conv_match_by_name(BonjourJabberConversation *bconv)
 
 
 void bonjour_jabber_conv_match_by_ip(BonjourJabberConversation *bconv) {
-  BonjourJabber *jdata = ((BonjourData*) bconv->account->gc->proto_data)->jabber_data;
+  BonjourJabber *jdata;
   struct _match_buddies_by_address_t *mbba;
   GSList *buddies;
+
+  g_return_if_fail(bconv != NULL);
+  g_return_if_fail(bconv->account != NULL);
+  g_return_if_fail(bconv->account->gc != NULL);
+  g_return_if_fail(bconv->account->gc->proto_data != NULL);
+
+  jdata = ((BonjourData*) bconv->account->gc->proto_data)->jabber_data;
+  g_return_if_fail(jdata != NULL);
 
   /* This routine is a fallback matcher.  Do not leave a previous tentative
    * association in place if every IP candidate is rejected. */
@@ -2944,6 +2990,15 @@ _find_or_start_conversation(BonjourJabber *jdata, const gchar *to)
   if (bb->conversation == NULL)
   {
      purple_debug_info("barev", "Creating new conversation for %s (was NULL)\n", to);
+
+    if (bb->ips == NULL || bb->ips->data == NULL) {
+      /* No address known yet (e.g. bare-nick contact whose IP has not been
+       * learned).  Connecting is impossible; don't dereference NULL. */
+      purple_debug_warning("barev",
+          "No known IP for buddy %s; cannot start conversation\n", to);
+      return NULL;
+    }
+
     const char *ip = bb->ips->data; /* Start with the first IP address. */
 
     purple_debug_info("barev", "Starting conversation with %s at %s:%d\n", to, ip, bb->port_p2pj);
@@ -3262,6 +3317,13 @@ bonjour_jabber_close_conversation(BonjourJabberConversation *bconv)
   if (!bconv || bconv->closing)
     return;
 
+  /* Never free the parser context from inside a libxml SAX callback: libxml
+   * would keep using it after we return.  Defer to the event loop instead. */
+  if (bconv->in_parser) {
+    async_bonjour_jabber_close_conversation(bconv);
+    return;
+  }
+
   bconv->closing = TRUE;
 
   purple_debug_info("barev",
@@ -3301,12 +3363,8 @@ bonjour_jabber_close_conversation(BonjourJabberConversation *bconv)
       bb->conversation = NULL;
 
     if (was_current && bconv->account && bconv->account->gc &&
-        PURPLE_CONNECTION_IS_VALID(bconv->account->gc)) {
-      purple_prpl_got_user_status(bconv->account,
-                                  purple_buddy_get_name(pb),
-                                  BONJOUR_STATUS_ID_OFFLINE,
-                                  NULL);
-    }
+        PURPLE_CONNECTION_IS_VALID(bconv->account->gc))
+      bonjour_buddy_defer_offline(bb);
   }
 
   /* Cancel file transfers which have not started yet. */
@@ -3377,6 +3435,11 @@ bonjour_jabber_close_conversation(BonjourJabberConversation *bconv)
   if (bconv->tx_buf)
     purple_circ_buffer_destroy(bconv->tx_buf);
 
+  /* Terminate any active Jingle sessions on this connection */
+  if (bconv->jingle_sessions) {
+    barev_jingle_terminate_sessions(bconv);
+  }
+
   g_free(bconv->buddy_name);
   g_free(bconv->ip);
   g_free(bconv->local_ip);
@@ -3420,7 +3483,15 @@ bonjour_jabber_stop(BonjourJabber *jdata)
   }
 
   while (jdata->pending_conversations != NULL) {
-    bonjour_jabber_close_conversation(jdata->pending_conversations->data);
+    BonjourJabberConversation *bconv = jdata->pending_conversations->data;
+
+    /* Detach the node *before* closing: close_conversation() no-ops on an
+     * already-closing conversation, which used to spin this loop forever. */
+    jdata->pending_conversations =
+        g_slist_delete_link(jdata->pending_conversations,
+                            jdata->pending_conversations);
+    if (bconv != NULL)
+      bonjour_jabber_close_conversation(bconv);
   }
 }
 
@@ -3473,6 +3544,9 @@ xep_iq_send_and_free(XepIq *iq)
   int ret = -1;
   PurpleBuddy *pb = NULL;
 
+  if (iq == NULL)
+    return -1;
+
   /* start the talk, reuse the message socket  */
   pb = _find_or_start_conversation((BonjourJabber*) iq->data, iq->to);
   /* Send the message */
@@ -3488,6 +3562,32 @@ xep_iq_send_and_free(XepIq *iq)
   g_free(iq);
 
   return (ret >= 0) ? 0 : -1;
+}
+
+int
+bonjour_jabber_send_xml(BonjourJabberConversation *bconv, xmlnode *node)
+{
+  gchar *str;
+  int ret = -1;
+
+  if (!bconv || !node || !bconv->pb)
+    return -1;
+  str = xmlnode_to_str(node, NULL);
+  if (!str)
+    return -1;
+  ret = _send_data(bconv->pb, str);
+  g_free(str);
+  return ret;
+}
+
+static guint barev_jingle_id_counter = 0;
+
+gchar *
+bonjour_jabber_next_id(void)
+{
+  return g_strdup_printf("j-%lu-%u",
+                         (unsigned long)time(NULL),
+                         ++barev_jingle_id_counter);
 }
 
 /* Barev: return local IPs suitable for Yggdrasil file-transfer.
@@ -3757,5 +3857,3 @@ bonjour_jabber_send_typing(PurpleBuddy *pb, PurpleTypingState state)
     _send_data(pb, xml);
     g_free(xml);
 }
-
-

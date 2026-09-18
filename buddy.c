@@ -24,6 +24,52 @@
 #include "barev.h"
 #include "glibcompat.h"
 #include "debug.h"
+#include "eventloop.h"
+
+#define BONJOUR_OFFLINE_GRACE_SECONDS 10
+
+static gboolean
+bonjour_buddy_offline_timeout_cb(gpointer data)
+{
+  BonjourBuddy *buddy = data;
+
+  buddy->offline_timeout = 0;
+
+  if (buddy->conversation != NULL)
+    return FALSE;
+
+  purple_debug_info("barev", "Offline grace period expired for %s\n",
+                    buddy->name);
+  purple_prpl_got_user_status(buddy->account, buddy->name,
+                              BONJOUR_STATUS_ID_OFFLINE, NULL);
+
+  return FALSE;
+}
+
+void
+bonjour_buddy_defer_offline(BonjourBuddy *buddy)
+{
+  if (buddy == NULL || buddy->conversation != NULL ||
+      buddy->offline_timeout != 0)
+    return;
+
+  buddy->offline_timeout = purple_timeout_add_seconds(
+      BONJOUR_OFFLINE_GRACE_SECONDS, bonjour_buddy_offline_timeout_cb, buddy);
+  purple_debug_info("barev", "Deferring offline status for %s by %d seconds\n",
+                    buddy->name, BONJOUR_OFFLINE_GRACE_SECONDS);
+}
+
+void
+bonjour_buddy_cancel_deferred_offline(BonjourBuddy *buddy)
+{
+  if (buddy == NULL || buddy->offline_timeout == 0)
+    return;
+
+  purple_timeout_remove(buddy->offline_timeout);
+  buddy->offline_timeout = 0;
+  purple_debug_info("barev", "Canceled deferred offline status for %s\n",
+                    buddy->name);
+}
 
 /**
  * Creates a new buddy.
@@ -42,6 +88,9 @@ bonjour_buddy_new(const gchar *name, PurpleAccount* account)
 #define _B_CLR(x) g_free(x); x = NULL;
 
 void clear_bonjour_buddy_values(BonjourBuddy *buddy) {
+
+  if (buddy == NULL)
+    return;
 
   _B_CLR(buddy->first)
   _B_CLR(buddy->email);
@@ -207,6 +256,10 @@ bonjour_buddy_add_to_purple(BonjourBuddy *bonjour_buddy, PurpleBuddy *buddy)
  * If the buddy is being saved, mark as offline, otherwise delete
  */
 void bonjour_buddy_signed_off(PurpleBuddy *pb) {
+  BonjourBuddy *buddy = purple_buddy_get_protocol_data(pb);
+
+  bonjour_buddy_cancel_deferred_offline(buddy);
+
   if (PURPLE_BLIST_NODE_SHOULD_SAVE(pb)) {
     purple_prpl_got_user_status(purple_buddy_get_account(pb),
               purple_buddy_get_name(pb), "offline", NULL);
@@ -332,6 +385,9 @@ bonjour_buddies_load_from_blist(PurpleAccount *account)
 void
 bonjour_buddy_delete(BonjourBuddy *buddy)
 {
+  if (buddy == NULL)
+    return;
+
   g_free(buddy->name);
   while (buddy->ips != NULL) {
     g_free(buddy->ips->data);
@@ -359,6 +415,8 @@ bonjour_buddy_delete(BonjourBuddy *buddy)
 
   bonjour_jabber_close_conversation(buddy->conversation);
   buddy->conversation = NULL;
+
+  bonjour_buddy_cancel_deferred_offline(buddy);
 
   g_free(buddy);
 }
