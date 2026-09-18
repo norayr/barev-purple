@@ -3787,14 +3787,12 @@ gboolean bonjour_jabber_handle_ping(xmlnode *packet, BonjourJabberConversation *
       purple_debug_info("barev", "Responded to ping from %s\n",
                        xmlnode_get_attrib(packet, "from"));
 
-      /* Proof of life: if they can ping us, they are online. */
+      /* A ping only proves transport liveness.  Do not replace the explicit
+       * presence state or clear its status message. */
       if (bconv->pb) {
-          PurpleAccount *acct = purple_buddy_get_account(bconv->pb);
-          const char *who = purple_buddy_get_name(bconv->pb);
           bconv->last_activity = time(NULL);
           bconv->ping_failures = 0;
           bconv->recv_stream_start = TRUE;
-          purple_prpl_got_user_status(acct, who, BONJOUR_STATUS_ID_AVAILABLE, NULL);
       }
 
       return TRUE;
