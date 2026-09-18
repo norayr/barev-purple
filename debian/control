@@ -2,7 +2,8 @@ Source: barev-purple
 Section: user/network
 Priority: optional
 Maintainer: Norayr Chilingarian <norayr@arnet.am>
-Build-Depends: debhelper (>= 11), libpurple-dev, libxml2-dev, yggdrasil
+Build-Depends: debhelper (>= 11), libpurple-dev, libxml2-dev,
+ libgstreamer1.0-dev, libfarstream-0.2-dev, yggdrasil
 Standards-Version: 4.1.3
 Homepage: https://github.com/norayr/barev-purple
 XSBC-Bugtracker: mailto:norayr@arnet.am
@@ -31,4 +32,3 @@ Description: Barev libpurple plugin for Yggdrasil
  It provides a serverless protocol intended to work over the Yggdrasil network.
  This package provides the libpurple backend used by Telepathy-Haze for
  maemo-leste's Conversations system.
-

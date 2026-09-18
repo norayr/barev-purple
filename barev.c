@@ -39,6 +39,10 @@
 
 #include "barev.h"
 #include "jabber.h"
+#include "jingle/jingle.h"
+#ifdef USE_VV
+#include "jingle/rtp.h"
+#endif
 #include "buddy.h"
 #include "bonjour_ft.h"
 
@@ -361,10 +365,8 @@ barev_auto_connect_timer(gpointer data)
                           "Barev: buddy %s pending connection timed out (%lds), reconnecting\n",
                           who ? who : "(null)", (long)pending_secs);
         bonjour_jabber_close_conversation(bconv);
-        /* fall through to bonjour_jabber_open_stream */
-      }
-
-      if (bconv->socket >= 0 && is_socket_really_connected(bconv->socket)) {
+        /* bconv is freed; skip to open_stream below */
+      } else if (bconv->socket >= 0 && is_socket_really_connected(bconv->socket)) {
         purple_debug_info("barev",
                           "Barev: buddy %s really connected (sent=%d ping_timer=%u)\n",
                           who ? who : "(null)",
@@ -382,14 +384,14 @@ barev_auto_connect_timer(gpointer data)
         }
 
         continue;
+      } else {
+        /* Socket or stream is dead – clean up and let the loop reconnect */
+        purple_debug_info("barev",
+                          "Barev: buddy %s has DEAD connection, cleaning\n",
+                          who ? who : "(null)");
+
+        bonjour_jabber_close_conversation(bconv);
       }
-
-      /* Socket or stream is dead – clean up and let the loop reconnect */
-      purple_debug_info("barev",
-                        "Barev: buddy %s has DEAD connection, cleaning\n",
-                        who ? who : "(null)");
-
-      bonjour_jabber_close_conversation(bconv);
     }
 
     purple_debug_info("barev", "Barev: attempting connection to %s at %s\n",
@@ -800,8 +802,20 @@ static char *default_lastname;
 const char *
 bonjour_get_jid(PurpleAccount *account)
 {
-  PurpleConnection *conn = purple_account_get_connection(account);
-  BonjourData *bd = conn->proto_data;
+  PurpleConnection *conn;
+  BonjourData *bd;
+
+  if (account == NULL)
+    return NULL;
+
+  conn = purple_account_get_connection(account);
+  if (conn == NULL)
+    return NULL;
+
+  bd = conn->proto_data;
+  if (bd == NULL)
+    return NULL;
+
   return bd->jid;
 }
 
@@ -858,6 +872,10 @@ bonjour_login_barev(PurpleAccount *account)
     purple_connection_error_reason(gc,
       PURPLE_CONNECTION_ERROR_NETWORK_ERROR,
       _("Unable to listen for incoming IM connections"));
+    /* purple_connection_error_reason() only schedules the disconnect; the
+     * protocol's close() runs later from the event loop.  Detach our data
+     * first so close() does not touch this freed BonjourData. */
+    purple_connection_set_protocol_data(gc, NULL);
     g_free(bd->jabber_data);
     g_free(bd->jid);
     g_free(bd);
@@ -907,9 +925,22 @@ bonjour_login_barev(PurpleAccount *account)
    * empty blist, making the initial Telepathy contact list empty. */
   purple_connection_set_state(gc, PURPLE_CONNECTED);
 
+#ifdef USE_VV
+  /* Seed Purple's buddy capability cache after Haze is connected. Clients
+   * such as osso-addressbook may otherwise retain the zero capabilities they
+   * observed while the roster was being constructed. */
+  buddies = purple_find_buddies(account, NULL);
+  for (GSList *l = buddies; l; l = l->next) {
+    PurpleBuddy *buddy = l->data;
+    purple_prpl_got_media_caps(account, purple_buddy_get_name(buddy));
+  }
+  g_slist_free(buddies);
+#endif
+
   purple_debug_info("barev", "=== BAREV MODE READY ===\n");
 
-  /* 5. Start auto-connect timer: keep streams up while reachable */
+  /* 5. Connect once now, then keep streams up while peers are reachable. */
+  barev_auto_connect_timer(gc);
   bd->reconnect_timer = purple_timeout_add_seconds(30,
                                                    barev_auto_connect_timer,
                                                    gc);
@@ -941,6 +972,7 @@ bonjour_close(PurpleConnection *connection)
       barev_save_ip_to_account(account, purple_buddy_get_name(pb),
                                (const char *)bb->ips->data, bb->port_p2pj);
     }
+    bonjour_buddy_cancel_deferred_offline(bb);
     purple_prpl_got_user_status(account,
                                 purple_buddy_get_name(pb),
                                 BONJOUR_STATUS_ID_OFFLINE, NULL);
@@ -950,14 +982,21 @@ bonjour_close(PurpleConnection *connection)
    * its ephemeral MC store between sessions. */
   barev_save_persistent_contacts(account);
 
-  g_slist_free(buddies);
-
   /* Barev-only: just stop Jabber listener, no mDNS */
   if (bd != NULL && bd->jabber_data != NULL)
   {
     bonjour_jabber_stop(bd->jabber_data);
     g_free(bd->jabber_data);
   }
+
+  /* Stopping the listener closes active streams.  Do not leave their
+   * deferred-offline callbacks alive after the account has shut down. */
+  for (iter = buddies; iter; iter = iter->next) {
+    PurpleBuddy *pb = (PurpleBuddy *)iter->data;
+    bonjour_buddy_cancel_deferred_offline(
+        purple_buddy_get_protocol_data(pb));
+  }
+  g_slist_free(buddies);
 
   if (bd != NULL && bd->reconnect_timer != 0) {
     purple_timeout_remove(bd->reconnect_timer);
@@ -993,10 +1032,16 @@ bonjour_list_icon(PurpleAccount *account, PurpleBuddy *buddy)
 static int
 bonjour_send_im(PurpleConnection *connection, const char *to, const char *msg, PurpleMessageFlags flags)
 {
-  if(!to || !msg)
+  BonjourData *bd;
+
+  if(!connection || !to || !msg)
     return 0;
 
-  return bonjour_jabber_send_message(((BonjourData*)(connection->proto_data))->jabber_data, to, msg);
+  bd = connection->proto_data;
+  if (bd == NULL || bd->jabber_data == NULL)
+    return 0;
+
+  return bonjour_jabber_send_message(bd->jabber_data, to, msg);
 }
 
 static void
@@ -1064,7 +1109,7 @@ bonjour_set_status(PurpleAccount *account, PurpleStatus *status)
       /* If going offline, also send stream end */
       if (offline && bb->conversation->socket >= 0) {
         size_t len = strlen(STREAM_END);
-        send(bb->conversation->socket, STREAM_END, len, 0);
+        send(bb->conversation->socket, STREAM_END, len, MSG_NOSIGNAL);
       }
     }
     g_slist_free(buddies);
@@ -1145,20 +1190,10 @@ bonjour_status_types(PurpleAccount *account)
 static void
 bonjour_convo_closed(PurpleConnection *connection, const char *who)
 {
-  PurpleBuddy *buddy = purple_find_buddy(connection->account, who);
-  BonjourBuddy *bb;
-
-  if (buddy == NULL || (bb = purple_buddy_get_protocol_data(buddy)) == NULL)
-  {
-    /*
-     * This buddy is not in our buddy list, and therefore does not really
-     * exist, so we won't have any data about them.
-     */
-    return;
-  }
-
-  bonjour_jabber_close_conversation(bb->conversation);
-  bb->conversation = NULL;
+  /* Barev keeps TCP streams open regardless of chat window lifecycle.
+   * Closing the XMPP stream here would make the buddy appear offline
+   * whenever the user closes a conversation window. */
+  (void)connection; (void)who;
 }
 
 static void
@@ -1299,7 +1334,7 @@ bonjour_do_group_change(PurpleBuddy *buddy, const char *new_group) {
   if (purple_strequal(new_group, BONJOUR_GROUP_NAME))
     purple_blist_node_set_flags((PurpleBlistNode *)buddy, oldflags | PURPLE_BLIST_NODE_FLAG_NO_SAVE);
   else
-    purple_blist_node_set_flags((PurpleBlistNode *)buddy, oldflags ^ PURPLE_BLIST_NODE_FLAG_NO_SAVE);
+    purple_blist_node_set_flags((PurpleBlistNode *)buddy, oldflags & ~PURPLE_BLIST_NODE_FLAG_NO_SAVE);
 
 }
 
@@ -1352,6 +1387,41 @@ plugin_unload(PurplePlugin *plugin)
 }
 
 static PurplePlugin *my_protocol = NULL;
+
+#ifdef USE_VV
+static gboolean
+barev_initiate_media(PurpleAccount *account, const char *who,
+                     PurpleMediaSessionType type)
+{
+  PurpleBuddy *pb = purple_find_buddy(account, who);
+  BonjourBuddy *bb;
+
+  if (!pb) return FALSE;
+  bb = purple_buddy_get_protocol_data(pb);
+  if (!bb || !bb->conversation || !bb->conversation->recv_stream_start)
+    return FALSE;
+
+  return jingle_rtp_initiate_media(bb->conversation, who, type);
+}
+
+static PurpleMediaCaps
+barev_get_media_caps(PurpleAccount *account, const char *who)
+{
+  PurpleBuddy *pb = purple_find_buddy(account, who);
+  BonjourBuddy *bb;
+
+  if (!pb) return PURPLE_MEDIA_CAPS_NONE;
+  bb = purple_buddy_get_protocol_data(pb);
+  if (!bb || !bb->ips || !bb->ips->data)
+    return PURPLE_MEDIA_CAPS_NONE;
+
+  /* Capabilities describe the configured peer, not whether its auto-connect
+   * stream happened to be established when Haze queried the contact. Haze
+   * maps AUDIO and VIDEO individually; AUDIO_VIDEO does not imply VIDEO. */
+  return PURPLE_MEDIA_CAPS_AUDIO | PURPLE_MEDIA_CAPS_VIDEO |
+         PURPLE_MEDIA_CAPS_AUDIO_VIDEO;
+}
+#endif /* USE_VV */
 
 static PurplePluginProtocolInfo prpl_info =
 {
@@ -1422,8 +1492,13 @@ static PurplePluginProtocolInfo prpl_info =
   NULL,                                                    /* get_attention_types */
   sizeof(PurplePluginProtocolInfo),                        /* struct_size */
   NULL,                                                    /* get_account_text_table */
+#ifdef USE_VV
+  barev_initiate_media,                                    /* initiate_media */
+  barev_get_media_caps,                                    /* get_media_caps */
+#else
   NULL,                                                    /* initiate_media */
   NULL,                                                    /* get_media_caps */
+#endif
   NULL,                                                    /* get_moods */
   NULL,                                                    /* set_public_alias */
   NULL,                                                    /* get_public_alias */

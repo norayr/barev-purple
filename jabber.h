@@ -70,6 +70,10 @@ typedef struct _BonjourJabberConversation
   PurpleCircBuffer *tx_buf;
   int sent_stream_start; /* 0 = Unsent, 1 = Partial, 2 = Complete */
   gboolean recv_stream_start;
+  /* TRUE while libxml is dispatching SAX callbacks for this conversation.
+   * Destroying the parser from inside a callback is a use-after-free, so
+   * close requests are deferred to the event loop while this is set. */
+  gboolean in_parser;
   PurpleProxyConnectData *connect_data;
   gpointer stream_data;
   xmlParserCtxt *context;
@@ -91,6 +95,8 @@ typedef struct _BonjourJabberConversation
   gchar *last_ping_id;        /* ID of last sent ping */
   time_t last_activity;       /* Last time we received any data */
   gint ping_failures;         /* Consecutive ping failures */
+  /* Jingle voice/video sessions keyed by sid (GHashTable or NULL) */
+  GHashTable *jingle_sessions;
 } BonjourJabberConversation;
 
 /**
@@ -148,7 +154,11 @@ int bonjour_jabber_open_stream(BonjourJabber *jdata, const char *to);
 
 void append_iface_if_linklocal(char *ip, guint32 interface_param);
 
-// for ping
+/* Jingle helpers: send an xmlnode over a bconv's stream, generate a unique ID */
+int  bonjour_jabber_send_xml(BonjourJabberConversation *bconv, xmlnode *node);
+gchar *bonjour_jabber_next_id(void);
+
+/* for ping */
 
 void bonjour_jabber_start_ping(BonjourJabberConversation *bconv);
 void bonjour_jabber_stop_ping(BonjourJabberConversation *bconv);

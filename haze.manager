@@ -12,6 +12,8 @@ param-AIM=s
 param-jid=s
 default-port=1337
 Interfaces=org.freedesktop.Telepathy.Protocol.Interface.Presence;
+ConnectionInterfaces=org.freedesktop.Telepathy.Connection.Interface.ContactList;org.freedesktop.Telepathy.Connection.Interface.ContactGroups;org.freedesktop.Telepathy.Connection.Interface.Requests;org.freedesktop.Telepathy.Connection.Interface.Presence;org.freedesktop.Telepathy.Connection.Interface.SimplePresence;org.freedesktop.Telepathy.Connection.Interface.Capabilities;org.freedesktop.Telepathy.Connection.Interface.ContactCapabilities;org.freedesktop.Telepathy.Connection.Interface.Contacts;org.freedesktop.Telepathy.Connection.Interface.Aliasing;
+RequestableChannelClasses=barev-text;barev-media;
 status-available=type:2 may-set-on-self:true can-have-message:true
 status-away=type:3 may-set-on-self:true can-have-message:true
 status-busy=type:6 may-set-on-self:true can-have-message:false
@@ -19,3 +21,13 @@ status-offline=type:1 may-set-on-self:false can-have-message:false
 VCardField=x-barev
 EnglishName=Barev
 Icon=im-barev
+
+[barev-text]
+org.freedesktop.Telepathy.Channel.ChannelType s=org.freedesktop.Telepathy.Channel.Type.Text
+org.freedesktop.Telepathy.Channel.TargetHandleType u=1
+allowed=org.freedesktop.Telepathy.Channel.TargetHandle;org.freedesktop.Telepathy.Channel.TargetID;
+
+[barev-media]
+org.freedesktop.Telepathy.Channel.ChannelType s=org.freedesktop.Telepathy.Channel.Type.StreamedMedia
+org.freedesktop.Telepathy.Channel.TargetHandleType u=1
+allowed=org.freedesktop.Telepathy.Channel.TargetHandle;org.freedesktop.Telepathy.Channel.TargetID;org.freedesktop.Telepathy.Channel.Type.StreamedMedia.InitialAudio;org.freedesktop.Telepathy.Channel.Type.StreamedMedia.InitialVideo;

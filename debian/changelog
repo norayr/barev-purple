@@ -1,3 +1,11 @@
+barev-purple (2.14) unstable; urgency=medium
+
+  * adding jingle audio and video calls over yggdrasil raw udp.
+  * publishing streamed media capabilities through telepathy haze.
+  * deferring offline presence during transient stream replacement.
+
+ -- Norayr Chilingarian <norayr@arnet.am>  Sat, 19 Sep 2026 00:00:00 +0000
+
 barev-purple (2.13) unstable; urgency=low
 
   * adding 120-second timeout for pending XMPP stream connections: if
