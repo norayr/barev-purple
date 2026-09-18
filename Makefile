@@ -9,6 +9,9 @@ PLUGIN_DIR := $(shell pkg-config --variable=plugindir purple)
 # Where to install icons:
 DATADIR := $(shell pkg-config --variable=datadir purple)
 ICON_DIR := $(DATADIR)/pixmaps/pidgin/protocols
+ICON_STYLE ?= black
+ICON_PNG := barev_$(ICON_STYLE).png
+ICON_SVG := $(if $(filter white,$(ICON_STYLE)),barev_white.svg,barev.svg)
 
 # Static Barev protocol metadata consumed by Mission Control before Haze starts.
 TELEPATHY_MANAGER_DIR ?= /usr/share/telepathy/managers
@@ -109,10 +112,10 @@ install: $(PLUGIN)
 	install -d "$(DESTDIR)$(ICON_DIR)/22"
 	install -d "$(DESTDIR)$(ICON_DIR)/48"
 	install -d "$(DESTDIR)$(ICON_DIR)/scalable"
-	install -m 644 logo/16/barev_black.png "$(DESTDIR)$(ICON_DIR)/16/barev.png"
-	install -m 644 logo/22/barev_black.png "$(DESTDIR)$(ICON_DIR)/22/barev.png"
-	install -m 644 logo/48/barev_black.png "$(DESTDIR)$(ICON_DIR)/48/barev.png"
-	install -m 644 logo/scalable/barev.svg "$(DESTDIR)$(ICON_DIR)/scalable/"
+	install -m 644 "logo/16/$(ICON_PNG)" "$(DESTDIR)$(ICON_DIR)/16/barev.png"
+	install -m 644 "logo/22/$(ICON_PNG)" "$(DESTDIR)$(ICON_DIR)/22/barev.png"
+	install -m 644 "logo/48/$(ICON_PNG)" "$(DESTDIR)$(ICON_DIR)/48/barev.png"
+	install -m 644 "logo/scalable/$(ICON_SVG)" "$(DESTDIR)$(ICON_DIR)/scalable/barev.svg"
 
 uninstall:
 	rm -f "$(DESTDIR)$(PLUGIN_DIR)/$(PLUGIN)"
