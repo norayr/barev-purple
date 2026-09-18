@@ -121,6 +121,8 @@ void async_bonjour_jabber_close_conversation(BonjourJabberConversation *bconv);
 
 void bonjour_jabber_stream_started(BonjourJabberConversation *bconv);
 
+const char *bonjour_jabber_get_local_jid(BonjourJabberConversation *bconv);
+
 void bonjour_jabber_process_packet(PurpleBuddy *pb, xmlnode *packet);
 
 void bonjour_jabber_stop(BonjourJabber *data);

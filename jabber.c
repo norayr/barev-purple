@@ -244,7 +244,7 @@ bonjour_jabber_request_vcard(PurpleBuddy *pb, gboolean for_userinfo)
         return FALSE;
 
     account = purple_buddy_get_account(pb);
-    from = account ? bonjour_get_jid(account) : "";
+    from = bonjour_jabber_get_local_jid(bconv);
     to   = purple_buddy_get_name(pb);
 
     id = barev_make_iq_id("vcard");
@@ -456,7 +456,10 @@ barev_handle_vcard_iq(xmlnode *packet, PurpleBuddy *pb)
     if (type && !g_ascii_strcasecmp(type, "get")) {
         /* Peer requests our vCard: reply with PHOTO if we have an account icon */
         PurpleAccount *account = purple_buddy_get_account(pb);
-        const char *from = account ? bonjour_get_jid(account) : "";
+        BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
+        const char *from = bb && bb->conversation
+                           ? bonjour_jabber_get_local_jid(bb->conversation)
+                           : account ? bonjour_get_jid(account) : "";
         const char *to   = purple_buddy_get_name(pb);
 
         PurpleStoredImage *img = NULL;
@@ -634,9 +637,9 @@ safe_set_buddy_status(PurpleAccount *account, const char *who, const char *statu
     }
 }
 
-/* Get the JID for a specific conversation based on its actual source IP */
-static const char *
-bonjour_get_conversation_jid(BonjourJabberConversation *bconv)
+/* Get the JID for a specific conversation based on its actual source IP. */
+const char *
+bonjour_jabber_get_local_jid(BonjourJabberConversation *bconv)
 {
     static char jid_buf[512];
     const char *username = purple_account_get_username(bconv->account);
@@ -653,6 +656,31 @@ bonjour_get_conversation_jid(BonjourJabberConversation *bconv)
     }
 
     return jid_buf;
+}
+
+static void
+barev_refresh_account_jid(BonjourJabberConversation *bconv)
+{
+    PurpleConnection *gc;
+    BonjourData *bd;
+    const char *local_jid;
+
+    if (!bconv || !bconv->local_ip || !*bconv->local_ip || !bconv->account)
+        return;
+
+    gc = purple_account_get_connection(bconv->account);
+    bd = gc ? gc->proto_data : NULL;
+    if (!bd)
+        return;
+
+    local_jid = bonjour_jabber_get_local_jid(bconv);
+    if (!local_jid || !*local_jid || purple_strequal(bd->jid, local_jid))
+        return;
+
+    purple_debug_info("barev", "Updating account JID from %s to %s\n",
+                      bd->jid ? bd->jid : "(null)", local_jid);
+    g_free(bd->jid);
+    bd->jid = g_strdup(local_jid);
 }
 
 /* Validate that JID IP matches actual connection IP */
@@ -789,7 +817,7 @@ bonjour_candidate_wins_collision(PurpleBuddy *pb,
     if (existing->incoming == candidate->incoming)
         return FALSE;
 
-    local_jid = bonjour_get_jid(candidate->account);
+    local_jid = bonjour_jabber_get_local_jid(candidate);
     remote_jid = pb ? purple_buddy_get_name(pb) : NULL;
 
     if (!local_jid || !remote_jid)
@@ -1793,7 +1821,7 @@ bonjour_jabber_send_presence(PurpleBuddy *pb,
     }
 
     account = purple_buddy_get_account(pb);
-    from = account ? bonjour_get_jid(account) : NULL;
+    from = bonjour_jabber_get_local_jid(bconv);
     if (!from)
         from = "";
     if (*from)
@@ -1978,7 +2006,8 @@ static gboolean bonjour_jabber_send_stream_init(BonjourJabberConversation *bconv
   if (bname == NULL)
     bname = "";
 
-  stream_start = g_strdup_printf(DOCTYPE, bonjour_get_conversation_jid(bconv), bname);
+  stream_start = g_strdup_printf(DOCTYPE,
+      bonjour_jabber_get_local_jid(bconv), bname);
   len = strlen(stream_start);
 
   bconv->sent_stream_start = PARTIALLY_SENT;
@@ -2094,6 +2123,7 @@ void bonjour_jabber_stream_started(BonjourJabberConversation *bconv) {
         purple_buddy_get_name(pb), bconv->ping_timer);
 
     if (bb) {
+      barev_refresh_account_jid(bconv);
       bonjour_buddy_cancel_deferred_offline(bb);
       bonjour_jabber_start_ping(bconv);
 #ifdef USE_VV
@@ -3229,7 +3259,7 @@ bonjour_jabber_send_message(BonjourJabber *jdata, const gchar *to, const gchar *
     xmlnode_set_attrib(message_node, "to", bb->name ? bb->name : "");
 
     /* Ensure we never pass NULL to xmlnode_set_attrib */
-    const char *from = bonjour_get_jid(jdata->account);
+    const char *from = bonjour_jabber_get_local_jid(bb->conversation);
     if (!from)
         from = "";
     xmlnode_set_attrib(message_node, "from", from);
@@ -3715,7 +3745,7 @@ void bonjour_jabber_send_ping_request(BonjourJabberConversation *bconv) {
   xmlnode *iq = xmlnode_new("iq");
   xmlnode_set_attrib(iq, "type", "get");
   xmlnode_set_attrib(iq, "id", bconv->last_ping_id);
-  xmlnode_set_attrib(iq, "from", bonjour_get_jid(bconv->account));
+  xmlnode_set_attrib(iq, "from", bonjour_jabber_get_local_jid(bconv));
   xmlnode_set_attrib(iq, "to", purple_buddy_get_name(bconv->pb));
 
   xmlnode *ping = xmlnode_new_child(iq, "ping");
@@ -3836,7 +3866,7 @@ bonjour_jabber_send_typing(PurpleBuddy *pb, PurpleTypingState state)
     message_node = xmlnode_new("message");
     xmlnode_set_attrib(message_node, "to", bb->name ? bb->name : "");
 
-    from = bonjour_get_jid(jdata->account);
+    from = bonjour_jabber_get_local_jid(bb->conversation);
     xmlnode_set_attrib(message_node, "from", from ? from : "");
     xmlnode_set_attrib(message_node, "type", "chat");
 
