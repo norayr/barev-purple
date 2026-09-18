@@ -1150,8 +1150,7 @@ jingle_rtp_initiate_media(BonjourJabberConversation *bconv, const gchar *who,
 	gboolean ret = FALSE;
 	gchar *me = NULL, *sid = NULL;
 
-	/* own JID is just the account username */
-	me = g_strdup(purple_account_get_username(bconv->account));
+	me = g_strdup(bonjour_jabber_get_local_jid(bconv));
 	sid = bonjour_jabber_next_id();
 
 	session = jingle_session_create(bconv, sid, me, who, TRUE);
