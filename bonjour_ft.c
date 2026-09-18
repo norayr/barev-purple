@@ -1219,3 +1219,4 @@ bonjour_bytestreams_connect(PurpleXfer *xfer)
     purple_xfer_cancel_local(xfer);
   }
 }
+

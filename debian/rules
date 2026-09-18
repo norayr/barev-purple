@@ -4,7 +4,7 @@ override_dh_auto_build:
 	$(MAKE) USE_VV=1
 
 override_dh_auto_install:
-	$(MAKE) install USE_VV=1 DESTDIR=$(CURDIR)/debian/tmp
+	$(MAKE) install USE_VV=1 ICON_STYLE=white DESTDIR=$(CURDIR)/debian/tmp
 
 %:
 	dh $@
