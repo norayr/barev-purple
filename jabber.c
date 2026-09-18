@@ -90,7 +90,7 @@
 
 #define PING_INTERVAL 30      /* Send ping every 30 seconds */
 #define PING_TIMEOUT 10       /* Wait 10 seconds for response */
-#define MAX_PING_FAILURES 3   /* Mark offline after 3 consecutive failures */
+#define MAX_PING_FAILURES 2   /* Mark offline after 2 consecutive failures */
 
 #define BAREV_VCARD_NS         "vcard-temp"
 #define BAREV_VCARD_UPDATE_NS  "vcard-temp:x:update"
@@ -917,7 +917,7 @@ static gboolean bonjour_jabber_ping_timer_cb(gpointer data) {
   }
 
   time_t now = time(NULL);
-  if (now - bconv->last_activity > PING_INTERVAL * 2) {
+  if (now - bconv->last_activity >= PING_INTERVAL) {
     PurpleBuddy *pb = bconv->pb;
     BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
     bonjour_jabber_send_ping_request(bconv);
