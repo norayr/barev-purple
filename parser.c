@@ -359,6 +359,13 @@ bonjour_parser_structured_error_handler(void *user_data, const xmlError *error)
 {
   BonjourJabberConversation *bconv = user_data;
 
+  /* XEP-0054 deliberately defines the legacy namespace "vcard-temp".  It is
+   * not an absolute URI, so modern libxml reports a namespace warning even
+   * though the stanza is valid and remains fully parseable. */
+  if (error && error->code == XML_WAR_NS_URI_RELATIVE && error->message &&
+      strstr(error->message, "vcard-temp") != NULL)
+    return;
+
   /* defensive check: during conversation teardown, this callback might fire
    * after bconv has been freed. while the primary fix is ensuring proper
    * teardown order in jabber.c, this adds extra safety. */
