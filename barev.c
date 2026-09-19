@@ -474,24 +474,41 @@ barev_load_persistent_contacts(PurpleAccount *account)
 
     if (!strchr(jid, '@')) { g_free(jid); continue; }
 
-    PurpleBuddy *pb = purple_find_buddy(account, jid);
+    const char *at = strchr(jid, '@');
+    char *nick = g_strndup(jid, (gsize)(at - jid));
+    PurpleBuddy *bare_pb = purple_find_buddy(account, nick);
+    PurpleBuddy *full_pb = purple_find_buddy(account, jid);
+    PurpleBuddy *pb;
+
+    /* Mission Control restores contacts by their user-facing bare name.  Use
+     * that canonical buddy when present instead of creating a second full-JID
+     * buddy whose presence is invisible to the Telepathy contact list. */
+    if (bare_pb) {
+      pb = bare_pb;
+      if (full_pb && full_pb != bare_pb) {
+        purple_debug_info("barev",
+            "Removing duplicate full-JID buddy %s in favor of roster contact %s\n",
+            jid, nick);
+        purple_blist_remove_buddy(full_pb);
+      }
+    } else {
+      pb = full_pb;
+    }
+
     if (!pb) {
       pb = purple_buddy_new(account, jid, NULL);
       purple_blist_add_buddy(pb, NULL, group, NULL);
-      const char *at = strchr(jid, '@');
-      if (at && at != jid) {
-        char *nick = g_strndup(jid, (gsize)(at - jid));
+      if (*nick) {
         purple_blist_alias_buddy(pb, nick);
-        g_free(nick);
       }
     }
 
     /* Extract IP from JID and persist on the blist node */
-    const char *at  = strchr(jid, '@');
     const char *ip  = (at && *(at + 1)) ? at + 1 : NULL;
     bonjour_buddy_save_to_blist(pb, ip, port);
 
     n++;
+    g_free(nick);
     g_free(jid);
   }
 
