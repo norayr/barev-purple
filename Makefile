@@ -3,6 +3,9 @@ CFLAGS  ?= -g -O2
 WARN    ?= -Wall -Wextra -Wno-unused-parameter
 PICFLAG ?= -fPIC
 
+BAREV_BUILD_ID ?= $(shell git describe --tags --always --dirty 2>/dev/null || \
+	dpkg-parsechangelog -SVersion 2>/dev/null || printf unknown)
+
 # Where to install the plugin:
 PLUGIN_DIR := $(shell pkg-config --variable=plugindir purple)
 
@@ -67,7 +70,8 @@ endif
 
 # Final compiler & linker flags
 CFLAGS += $(WARN) $(PICFLAG) \
-          $(PURPLE_CFLAGS) $(GLIB_CFLAGS) $(LIBXML_CFLAGS) $(AVAHI_CFLAGS)
+          $(PURPLE_CFLAGS) $(GLIB_CFLAGS) $(LIBXML_CFLAGS) $(AVAHI_CFLAGS) \
+          -DBAREV_BUILD_ID=\"$(BAREV_BUILD_ID)\"
 
 LDLIBS  = $(PURPLE_LIBS) $(GLIB_LIBS) $(LIBXML_LIBS) $(AVAHI_LIBS) $(LDLIBS_EXTRA)
 
@@ -94,7 +98,7 @@ SRCS = \
 
 OBJS = $(SRCS:.c=.o)
 
-.PHONY: all clean install uninstall
+.PHONY: all clean install uninstall FORCE
 
 all: $(PLUGIN)
 
@@ -103,6 +107,10 @@ $(PLUGIN): $(OBJS)
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
+
+# The source revision can change without barev.c's timestamp changing.
+barev.o: FORCE
+FORCE:
 
 install: $(PLUGIN)
 	install -d "$(DESTDIR)$(PLUGIN_DIR)"

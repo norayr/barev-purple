@@ -55,6 +55,15 @@
 #include <sys/socket.h>
 #include <stdio.h>
 
+#ifndef BAREV_BUILD_ID
+#define BAREV_BUILD_ID "unknown"
+#endif
+
+#ifdef __GNUC__
+__attribute__((used, visibility("default")))
+#endif
+const char barev_build_id[] = "barev-purple " BAREV_BUILD_ID;
+
 
 #ifdef BAREV_DEBUG
 /* ─── diagnostic file logger (written to /tmp/barev-debug.log) ─── */
@@ -851,6 +860,7 @@ bonjour_login_barev(PurpleAccount *account)
   g_return_if_fail(gc != NULL);
 
   purple_debug_info("barev", "=== BAREV MODE STARTUP ===\n");
+  purple_debug_info("barev", "Build: %s\n", barev_build_id);
   purple_debug_info("barev", "Account: %s\n",
                     purple_account_get_username(account));
 
@@ -1539,7 +1549,7 @@ static PurplePluginInfo info =
 
   "prpl-barev",                                     /**< id             */
   "Barev",                                          /**< name           */
-  DISPLAY_VERSION,                                  /**< version        */
+  BAREV_BUILD_ID,                                   /**< version        */
                                                     /**  summary        */
   N_("Barev Protocol Plugin"),
                                                     /**  description    */
