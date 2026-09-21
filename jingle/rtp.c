@@ -360,6 +360,38 @@ jingle_rtp_state_changed_cb(PurpleMedia *media, PurpleMediaState state,
 }
 
 static void
+jingle_rtp_prepare_media_end(PurpleMedia *media, JingleSession *session,
+		const gchar *name)
+{
+	GList *iter;
+	gchar *participant = NULL;
+
+	if (media == NULL || session == NULL)
+		return;
+
+	if (name == NULL)
+		participant = jingle_session_get_remote_jid(session);
+	for (iter = jingle_session_get_contents(session); iter;
+			iter = g_list_next(iter)) {
+		gchar *sid = jingle_content_get_name(iter->data);
+		GstElement *tee = purple_media_get_tee(media, sid,
+				name != NULL ? name : participant);
+
+		if (tee != NULL) {
+			GstPad *pad = gst_element_get_static_pad(tee, "sink");
+			if (pad != NULL) {
+				purple_debug_info("jingle-rtp",
+						"flushing media stream before teardown: %s\n", sid);
+				gst_pad_send_event(pad, gst_event_new_flush_start());
+				gst_object_unref(pad);
+			}
+		}
+		g_free(sid);
+	}
+	g_free(participant);
+}
+
+static void
 jingle_rtp_stream_info_cb(PurpleMedia *media, PurpleMediaInfoType type,
 		gchar *sid, gchar *name, gboolean local, JingleSession *session)
 {
@@ -370,11 +402,15 @@ jingle_rtp_stream_info_cb(PurpleMedia *media, PurpleMediaInfoType type,
 	g_return_if_fail(JINGLE_IS_SESSION(session));
 
 	if (type == PURPLE_MEDIA_INFO_HANGUP || type == PURPLE_MEDIA_INFO_REJECT) {
-		BonjourJabberConversation *bconv = jingle_session_get_bconv(session);
-		xmlnode *iq = jingle_session_terminate_packet(session,
-				type == PURPLE_MEDIA_INFO_HANGUP ? "success" : "decline");
-		bonjour_jabber_send_xml(bconv, iq);
-		xmlnode_free(iq);
+		if (local) {
+			BonjourJabberConversation *bconv = jingle_session_get_bconv(session);
+			xmlnode *iq = jingle_session_terminate_packet(session,
+					type == PURPLE_MEDIA_INFO_HANGUP ? "success" : "decline");
+			bonjour_jabber_send_xml(bconv, iq);
+			xmlnode_free(iq);
+		}
+
+		jingle_rtp_prepare_media_end(media, session, name);
 
 		g_signal_handlers_disconnect_by_func(G_OBJECT(media),
 				G_CALLBACK(jingle_rtp_state_changed_cb), session);
@@ -383,7 +419,9 @@ jingle_rtp_stream_info_cb(PurpleMedia *media, PurpleMediaInfoType type,
 		g_signal_handlers_disconnect_by_func(G_OBJECT(media),
 				G_CALLBACK(jingle_rtp_new_candidate_cb), session);
 
-		g_object_unref(session);
+		/* Remote termination is released by the Jingle dispatch path. */
+		if (local)
+			g_object_unref(session);
 	} else if (type == PURPLE_MEDIA_INFO_ACCEPT && sid && name &&
 			jingle_session_is_initiator(session) == FALSE) {
 		jingle_rtp_ready(session);
@@ -847,6 +885,12 @@ jingle_rtp_parse_codecs(xmlnode *description)
 		encoding_name = xmlnode_get_attrib(codec_element, "name");
 		id = xmlnode_get_attrib(codec_element, "id");
 		clock_rate = xmlnode_get_attrib(codec_element, "clockrate");
+		if (type == PURPLE_MEDIA_VIDEO && encoding_name != NULL &&
+				g_ascii_strcasecmp(encoding_name, "RAW") == 0) {
+			purple_debug_info("jingle-rtp",
+					"ignoring uncompressed RAW video codec\n");
+			continue;
+		}
 
 		codec = purple_media_codec_new(atoi(id), encoding_name, type,
 				clock_rate ? atoi(clock_rate) : 0);
@@ -862,7 +906,11 @@ jingle_rtp_parse_codecs(xmlnode *description)
 		purple_debug_info("jingle-rtp", "received codec: %s\n", codec_str);
 		g_free(codec_str);
 
-		codecs = g_list_append(codecs, codec);
+		if (type == PURPLE_MEDIA_VIDEO && encoding_name != NULL &&
+				g_ascii_strcasecmp(encoding_name, "VP8") == 0)
+			codecs = g_list_prepend(codecs, codec);
+		else
+			codecs = g_list_append(codecs, codec);
 	}
 	return codecs;
 }
@@ -884,35 +932,57 @@ jingle_rtp_parse_internal(xmlnode *rtp)
 static void
 jingle_rtp_add_payloads(xmlnode *description, GList *codecs)
 {
-	for (; codecs; codecs = codecs->next) {
-		PurpleMediaCodec *codec = (PurpleMediaCodec*)codecs->data;
-		GList *iter = purple_media_codec_get_optional_parameters(codec);
-		gchar *id, *name, *clockrate, *channels;
-		gchar *codec_str;
-		xmlnode *payload = xmlnode_new_child(description, "payload-type");
+	const gchar *media = xmlnode_get_attrib(description, "media");
+	gboolean video = purple_strequal(media, "video");
+	guint pass;
 
-		id       = g_strdup_printf("%d", purple_media_codec_get_id(codec));
-		name     = purple_media_codec_get_encoding_name(codec);
-		clockrate= g_strdup_printf("%d", purple_media_codec_get_clock_rate(codec));
-		channels = g_strdup_printf("%d", purple_media_codec_get_channels(codec));
+	/* Farstream can advertise uncompressed RAW video even when its RTP
+	 * pipeline cannot negotiate it. Prefer VP8 and omit RAW entirely. */
+	for (pass = 0; pass < (video ? 2 : 1); pass++) {
+		GList *codec_iter;
 
-		xmlnode_set_attrib(payload, "name",      name);
-		xmlnode_set_attrib(payload, "id",        id);
-		xmlnode_set_attrib(payload, "clockrate", clockrate);
-		xmlnode_set_attrib(payload, "channels",  channels);
+		for (codec_iter = codecs; codec_iter; codec_iter = codec_iter->next) {
+			PurpleMediaCodec *codec = codec_iter->data;
+			GList *iter;
+			gchar *id, *name, *clockrate, *channels;
+			gchar *codec_str;
+			xmlnode *payload;
+			gboolean is_vp8;
 
-		g_free(channels); g_free(clockrate); g_free(name); g_free(id);
+			name = purple_media_codec_get_encoding_name(codec);
+			is_vp8 = name != NULL && g_ascii_strcasecmp(name, "VP8") == 0;
+			if (video && (name == NULL ||
+					g_ascii_strcasecmp(name, "RAW") == 0 ||
+					(pass == 0) != is_vp8)) {
+				g_free(name);
+				continue;
+			}
 
-		for (; iter; iter = g_list_next(iter)) {
-			PurpleKeyValuePair *mparam = iter->data;
-			xmlnode *param = xmlnode_new_child(payload, "parameter");
-			xmlnode_set_attrib(param, "name",  mparam->key);
-			xmlnode_set_attrib(param, "value", mparam->value);
+			payload = xmlnode_new_child(description, "payload-type");
+			iter = purple_media_codec_get_optional_parameters(codec);
+
+			id       = g_strdup_printf("%d", purple_media_codec_get_id(codec));
+			clockrate= g_strdup_printf("%d", purple_media_codec_get_clock_rate(codec));
+			channels = g_strdup_printf("%d", purple_media_codec_get_channels(codec));
+
+			xmlnode_set_attrib(payload, "name",      name);
+			xmlnode_set_attrib(payload, "id",        id);
+			xmlnode_set_attrib(payload, "clockrate", clockrate);
+			xmlnode_set_attrib(payload, "channels",  channels);
+
+			g_free(channels); g_free(clockrate); g_free(name); g_free(id);
+
+			for (; iter; iter = g_list_next(iter)) {
+				PurpleKeyValuePair *mparam = iter->data;
+				xmlnode *param = xmlnode_new_child(payload, "parameter");
+				xmlnode_set_attrib(param, "name",  mparam->key);
+				xmlnode_set_attrib(param, "value", mparam->value);
+			}
+
+			codec_str = purple_media_codec_to_string(codec);
+			purple_debug_info("jingle", "adding codec: %s\n", codec_str);
+			g_free(codec_str);
 		}
-
-		codec_str = purple_media_codec_to_string(codec);
-		purple_debug_info("jingle", "adding codec: %s\n", codec_str);
-		g_free(codec_str);
 	}
 }
 
@@ -1080,7 +1150,8 @@ jingle_rtp_handle_action_internal(JingleContent *content, xmlnode *xmlcontent,
 			JingleSession *session = jingle_content_get_session(content);
 			PurpleMedia *media = jingle_rtp_get_media(session);
 			if (media != NULL)
-				purple_media_end(media, NULL, NULL);
+				purple_media_stream_info(media, PURPLE_MEDIA_INFO_HANGUP,
+						NULL, NULL, FALSE);
 			g_object_unref(session);
 			break;
 		}
