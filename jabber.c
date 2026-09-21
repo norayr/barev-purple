@@ -1666,7 +1666,7 @@ _send_data_write_cb(gpointer data, gint source, PurpleInputCondition cond)
           _("Unable to send message."),
           PURPLE_MESSAGE_SYSTEM, time(NULL));
 
-    bonjour_jabber_close_conversation(bconv);
+    async_bonjour_jabber_close_conversation(bconv);
     return;
   }
 
@@ -1727,7 +1727,7 @@ static gint _send_data(PurpleBuddy *pb, char *message)
           _("Unable to send message."),
           PURPLE_MESSAGE_SYSTEM, time(NULL));
 
-    bonjour_jabber_close_conversation(bconv);
+    async_bonjour_jabber_close_conversation(bconv);
     return -1;
   }
 

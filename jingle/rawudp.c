@@ -53,6 +53,7 @@ jingle_rawudp_candidate_free(JingleRawUdpCandidate *candidate)
 {
 	g_free(candidate->id);
 	g_free(candidate->ip);
+	g_free(candidate);
 }
 
 GType
@@ -131,7 +132,19 @@ jingle_rawudp_init(JingleRawUdp *rawudp)
 static void
 jingle_rawudp_finalize(GObject *rawudp)
 {
+	JingleRawUdpPrivate *priv = JINGLE_RAWUDP_GET_PRIVATE(rawudp);
+
 	purple_debug_info("jingle", "jingle_rawudp_finalize\n");
+	while (priv->local_candidates != NULL) {
+		jingle_rawudp_candidate_free(priv->local_candidates->data);
+		priv->local_candidates = g_list_delete_link(priv->local_candidates,
+				priv->local_candidates);
+	}
+	while (priv->remote_candidates != NULL) {
+		jingle_rawudp_candidate_free(priv->remote_candidates->data);
+		priv->remote_candidates = g_list_delete_link(priv->remote_candidates,
+				priv->remote_candidates);
+	}
 	G_OBJECT_CLASS(parent_class)->finalize(rawudp);
 }
 
@@ -180,7 +193,8 @@ jingle_rawudp_add_local_candidate(JingleRawUdp *rawudp,
 	GList *iter = rawudp->priv->local_candidates;
 	for (; iter; iter = g_list_next(iter)) {
 		JingleRawUdpCandidate *c = iter->data;
-		if (purple_strequal(c->id, candidate->id)) {
+		if (c->component == candidate->component &&
+				purple_strequal(c->id, candidate->id)) {
 			guint generation = c->generation + 1;
 			g_boxed_free(JINGLE_TYPE_RAWUDP_CANDIDATE, c);
 			rawudp->priv->local_candidates =
@@ -202,12 +216,14 @@ jingle_rawudp_get_remote_candidates(JingleRawUdp *rawudp)
 }
 
 static JingleRawUdpCandidate *
-jingle_rawudp_get_remote_candidate_by_id(JingleRawUdp *rawudp, gchar *id)
+jingle_rawudp_get_remote_candidate(JingleRawUdp *rawudp, gchar *id,
+		guint component)
 {
 	GList *iter = rawudp->priv->remote_candidates;
 	for (; iter; iter = g_list_next(iter)) {
 		JingleRawUdpCandidate *candidate = iter->data;
-		if (purple_strequal(candidate->id, id))
+		if (candidate->component == component &&
+				purple_strequal(candidate->id, id))
 			return candidate;
 	}
 	return NULL;
@@ -219,7 +235,8 @@ jingle_rawudp_add_remote_candidate(JingleRawUdp *rawudp,
 {
 	JingleRawUdpPrivate *priv = JINGLE_RAWUDP_GET_PRIVATE(rawudp);
 	JingleRawUdpCandidate *existing =
-			jingle_rawudp_get_remote_candidate_by_id(rawudp, candidate->id);
+			jingle_rawudp_get_remote_candidate(rawudp, candidate->id,
+					candidate->component);
 	if (existing != NULL) {
 		priv->remote_candidates = g_list_remove(priv->remote_candidates, existing);
 		g_boxed_free(JINGLE_TYPE_RAWUDP_CANDIDATE, existing);
@@ -252,7 +269,7 @@ jingle_rawudp_parse_internal(xmlnode *rawudp)
 	}
 
 	/* manufacture RTCP candidate if only RTP was sent */
-	if (rawudp_candidate != NULL &&
+	if (rawudp_candidate != NULL && rawudp_candidate->component == 1 &&
 			g_list_length(priv->remote_candidates) == 1) {
 		rawudp_candidate = g_boxed_copy(JINGLE_TYPE_RAWUDP_CANDIDATE, rawudp_candidate);
 		rawudp_candidate->component = 2;
