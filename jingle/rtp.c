@@ -374,14 +374,27 @@ jingle_rtp_prepare_media_end(PurpleMedia *media, JingleSession *session,
 	for (iter = jingle_session_get_contents(session); iter;
 			iter = g_list_next(iter)) {
 		gchar *sid = jingle_content_get_name(iter->data);
-		GstElement *tee = purple_media_get_tee(media, sid,
-				name != NULL ? name : participant);
+		GstElement *tee = purple_media_get_tee(media, sid, NULL);
 
 		if (tee != NULL) {
 			GstPad *pad = gst_element_get_static_pad(tee, "sink");
 			if (pad != NULL) {
 				purple_debug_info("jingle-rtp",
-						"flushing media stream before teardown: %s\n", sid);
+						"flushing local media session before teardown: %s\n",
+						sid);
+				gst_pad_send_event(pad, gst_event_new_flush_start());
+				gst_object_unref(pad);
+			}
+		}
+
+		tee = purple_media_get_tee(media, sid,
+				name != NULL ? name : participant);
+		if (tee != NULL) {
+			GstPad *pad = gst_element_get_static_pad(tee, "sink");
+			if (pad != NULL) {
+				purple_debug_info("jingle-rtp",
+						"flushing remote media stream before teardown: %s\n",
+						sid);
 				gst_pad_send_event(pad, gst_event_new_flush_start());
 				gst_object_unref(pad);
 			}
