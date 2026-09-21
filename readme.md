@@ -34,6 +34,17 @@ sudo apt install gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
   gstreamer1.0-plugins-bad gstreamer1.0-pulseaudio
 ```
 
+### Pinebook VP8 decoder workaround
+
+On Pinebook systems, the GStreamer `v4l2slvp8dec` hardware decoder may fail
+allocation negotiation. Calls then show only one video frame and the log reports
+`streaming stopped, reason not-negotiated (-4)`. Start Pidgin with the hardware
+decoder disabled so GStreamer uses the software `vp8dec` decoder instead:
+
+```sh
+GST_PLUGIN_FEATURE_RANK=v4l2slvp8dec:NONE pidgin
+```
+
 Telepathy-Farstream and Telepathy-Haze are not required for a regular
 Pidgin/libpurple installation.
 
