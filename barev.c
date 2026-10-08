@@ -52,7 +52,12 @@
 #include "libpurple/server.h" //for typing notifications
 
 #include <errno.h>
+#if defined(_WIN32)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <sys/socket.h>
+#endif
 #include <stdio.h>
 
 #ifndef BAREV_BUILD_ID
@@ -152,7 +157,13 @@ is_socket_really_connected(int socket_fd)
         return FALSE;
 
     /* Check for pending socket errors */
-    if (getsockopt(socket_fd, SOL_SOCKET, SO_ERROR, &error, &len) != 0) {
+	#if defined(_WIN32)
+	/* In Windows Sockets, the 4th argument is char *optval */
+	int res = getsockopt(socket_fd, SOL_SOCKET, SO_ERROR, (char *)&error, &len);
+	#else
+	int res = getsockopt(socket_fd, SOL_SOCKET, SO_ERROR, &error, &len);
+	#endif
+    if (res != 0) {
         return FALSE; /* getsockopt itself failed */
     }
 

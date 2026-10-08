@@ -21,9 +21,14 @@
  */
 #include <errno.h>
 #include <sys/types.h>
+#if defined(_WIN32)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#endif
 
 #include "internal.h"
 #include "util.h"

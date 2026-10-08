@@ -1,7 +1,19 @@
 CC      ?= gcc
 CFLAGS  ?= -g -O2
 WARN    ?= -Wall -Wextra -Wno-unused-parameter
-PICFLAG ?= -fPIC
+ifeq ($(OS),Windows_NT)
+  PICFLAG ?=
+  GLIB_ADDITIONAL ?= gobject-2.0
+  EXT := dll
+  WIN_LIBS ?= -lws2_32 -lnetapi32 -luuid
+  PURPLE_ADDITIONAL ?= -IC:/msys64/ucrt64/include
+else
+  PICFLAG ?= -fPIC
+  GLIB_ADDITIONAL ?=
+  EXT := so
+  WIN_LIBS ?=
+  PURPLE_ADDITIONAL ?=
+endif
 
 BAREV_BUILD_ID ?= $(shell git describe --tags --always --dirty 2>/dev/null || \
 	dpkg-parsechangelog -SVersion 2>/dev/null || printf unknown)
@@ -21,11 +33,11 @@ TELEPATHY_MANAGER_DIR ?= /usr/share/telepathy/managers
 INSTALL_HAZE_MANAGER ?= 0
 
 # Dependencies via pkg-config
-PURPLE_CFLAGS  := $(shell pkg-config --cflags purple)
+PURPLE_CFLAGS  := $(shell pkg-config --cflags purple) $(PURPLE_ADDITIONAL)
 PURPLE_LIBS    := $(shell pkg-config --libs purple)
 
 GLIB_CFLAGS    := $(shell pkg-config --cflags glib-2.0)
-GLIB_LIBS      := $(shell pkg-config --libs glib-2.0)
+GLIB_LIBS      := $(shell pkg-config --libs glib-2.0 $(GLIB_ADDITIONAL))
 
 LIBXML_CFLAGS  := $(shell pkg-config --cflags libxml-2.0)
 LIBXML_LIBS    := $(shell pkg-config --libs libxml-2.0)
@@ -73,9 +85,9 @@ CFLAGS += $(WARN) $(PICFLAG) \
           $(PURPLE_CFLAGS) $(GLIB_CFLAGS) $(LIBXML_CFLAGS) $(AVAHI_CFLAGS) \
           -DBAREV_BUILD_ID=\"$(BAREV_BUILD_ID)\"
 
-LDLIBS  = $(PURPLE_LIBS) $(GLIB_LIBS) $(LIBXML_LIBS) $(AVAHI_LIBS) $(LDLIBS_EXTRA)
+LDLIBS  = $(PURPLE_LIBS) $(GLIB_LIBS) $(LIBXML_LIBS) $(AVAHI_LIBS) $(LDLIBS_EXTRA) $(WIN_LIBS)
 
-PLUGIN  = libbarev.so
+PLUGIN  = libbarev.$(EXT)
 
 JINGLE_SRCS = \
   jingle/jingle.c \
@@ -127,6 +139,17 @@ endif
 	install -m 644 "logo/22/$(ICON_PNG)" "$(DESTDIR)$(ICON_DIR)/22/barev.png"
 	install -m 644 "logo/48/$(ICON_PNG)" "$(DESTDIR)$(ICON_DIR)/48/barev.png"
 	install -m 644 "logo/scalable/$(ICON_SVG)" "$(DESTDIR)$(ICON_DIR)/scalable/barev.svg"
+
+PIDGIN_WIN_DIR ?= C:/Program Files (x86)/Pidgin
+
+install-win: $(PLUGIN)
+	install -d "$(PIDGIN_WIN_DIR)/plugins"
+	install -m 644 $(PLUGIN) "$(PIDGIN_WIN_DIR)/plugins/$(PLUGIN)"
+	install -d "$(PIDGIN_WIN_DIR)/pixmaps/pidgin/protocols/16" "$(PIDGIN_WIN_DIR)/pixmaps/pidgin/protocols/22" "$(PIDGIN_WIN_DIR)/pixmaps/pidgin/protocols/48" "$(PIDGIN_WIN_DIR)/pixmaps/pidgin/protocols/scalable"
+	install -m 644 "logo/16/$(ICON_PNG)" "$(PIDGIN_WIN_DIR)/pixmaps/pidgin/protocols/16/barev.png"
+	install -m 644 "logo/22/$(ICON_PNG)" "$(PIDGIN_WIN_DIR)/pixmaps/pidgin/protocols/22/barev.png"
+	install -m 644 "logo/48/$(ICON_PNG)" "$(PIDGIN_WIN_DIR)/pixmaps/pidgin/protocols/48/barev.png"
+	install -m 644 "logo/scalable/$(ICON_SVG)" "$(PIDGIN_WIN_DIR)/pixmaps/pidgin/protocols/scalable/barev.svg"
 
 uninstall:
 	rm -f "$(DESTDIR)$(PLUGIN_DIR)/$(PLUGIN)"
