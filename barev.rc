@@ -1,0 +1,44 @@
+/*
+ * purple - Barev Protocol Plugin
+ *
+ * Purple is the legal property of its developers, whose names are too numerous
+ * to list here.  Please refer to the COPYRIGHT file distributed with this
+ * source distribution.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02111-1301  USA
+ */
+
+#include <windows.h>
+#include <internal.h>
+
+#define VER_FILETYPE VFT_DLL
+#define VER_FILEFLAGSMASK 0x3fL
+#define VER_FILEFLAGS 0x0L
+#define VER_FILEOS 0x00040004L
+#define VER_FILESUBTYPE VFT2_UNKNOWN
+
+#define VER_FILEVERSION 3,0,0,1
+#define VER_FILEVERSION_STR "3.0.0.1\0"
+#define VER_PRODUCTVERSION 3,0,0,1
+#define VER_PRODUCTVERSION_STR "3.0.0.1\0"
+
+#define VER_PRODUCTNAME_STR "Barev"
+#define VER_INTERNALNAME_STR "libbarev.dll"
+#define VER_FILEDESCRIPTION_STR "Barev Protocol Plug-In"
+#define VER_ORIGINALFILENAME_STR VER_INTERNALNAME_STR
+#define VER_COMPANYNAME_STR "Barev Developers, Purple Developers"
+#define VER_LEGALCOPYRIGHT_STR VER_COMPANYNAME_STR
+
+#include <common.ver>

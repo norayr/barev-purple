@@ -190,7 +190,7 @@ is_socket_really_connected(int socket_fd)
         return FALSE; /* closed by peer */
 
     /* result < 0 */
-    if (errno == EAGAIN || errno == EWOULDBLOCK)
+    if (barev_sock_transient())
         return TRUE;  /* no data yet, but socket is fine */
 
     return FALSE;      /* real error */
