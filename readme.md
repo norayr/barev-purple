@@ -10,6 +10,9 @@ Before making **Barev**, the [attempt](https://github.com/norayr/ybb) of using *
 ## Gentoo note
 If you're on Gentoo, just add [my overlay](https://github.com/norayr/norayr-overlay) and build from there. No need to manually build.
 
+## Windows note
+If you're on Windows, you should instantinate MinGW x86 compiler set, because with native x64 compiler stack it will compile purely 64-bit results, and Pidgin won't recognize them. There's a separate repository for it, which bootstraps on your system the latest version of MinGW for x86.
+
 ## Requirements
 
 You need Pidgin (libpurple) development headers and common build tools.

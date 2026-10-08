@@ -91,9 +91,6 @@
 #endif
 
 #if defined(_WIN32)
-#  define IFF_UP 0x1
-#  define IFF_LOOPBACK 0x4
-#  define IFF_MULTICAST 0x10
 
 struct ifaddrs {
 	struct ifaddrs  *ifa_next;
@@ -1799,7 +1796,7 @@ _send_data_write_cb(gpointer data, gint source, PurpleInputCondition cond)
 
   ret = send(bconv->socket, bconv->tx_buf->outptr, writelen, MSG_NOSIGNAL);
 
-  if (ret < 0 && errno == EAGAIN)
+  if (ret < 0 && barev_sock_transient())
     return;
   else if (ret <= 0) {
     PurpleConversation *conv = NULL;
@@ -1860,7 +1857,7 @@ static gint _send_data(PurpleBuddy *pb, char *message)
     ret = send(bconv->socket, message, len, MSG_NOSIGNAL);
   }
 
-  if (ret == -1 && errno == EAGAIN)
+  if (ret == -1 && barev_sock_transient())
     ret = 0;
   else if (ret <= 0) {
     PurpleConversation *conv;
@@ -2038,7 +2035,7 @@ _client_socket_handler(gpointer data, gint socket, PurpleInputCondition conditio
   /* Read the data from the socket */
   if ((len = recv(socket, message, sizeof(message) - 1, 0)) < 0) {
     /* There have been an error reading from the socket */
-    if (len != -1 || errno != EAGAIN) {
+    if (len != -1 || !barev_sock_transient()) {
       const char *err = g_strerror(errno);
 
       purple_debug_warning("barev",
@@ -2105,7 +2102,7 @@ _start_stream(gpointer data, gint source, PurpleInputCondition condition)
   /* Start Stream */
   ret = send(source, ss->msg, len, MSG_NOSIGNAL);
 
-  if (ret == -1 && errno == EAGAIN)
+  if (ret == -1 && barev_sock_transient())
     return;
   else if (ret <= 0) {
     const char *err = g_strerror(errno);
@@ -2171,7 +2168,7 @@ static gboolean bonjour_jabber_send_stream_init(BonjourJabberConversation *bconv
   /* Start the stream */
   ret = send(client_socket, stream_start, len, MSG_NOSIGNAL);
 
-  if (ret == -1 && errno == EAGAIN)
+  if (ret == -1 && barev_sock_transient())
     ret = 0;
   else if (ret <= 0) {
     const char *err = g_strerror(errno);
@@ -3251,7 +3248,7 @@ _find_or_start_conversation(BonjourJabber *jdata, const gchar *to)
                 }
 
                 if (connect(sock, (struct sockaddr*)&addr6, sizeof(addr6)) == 0 ||
-                    (errno == EINPROGRESS)) {
+                    !barev_connect_pending()) {
                     /* Connection successful or in progress */
                     BonjourJabberConversation *bconv;
 
