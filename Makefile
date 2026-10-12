@@ -1,7 +1,25 @@
+ifeq ($(OS),Windows_NT)
+  ifeq ($(origin CC),default)
+    CC := i686-w64-mingw32-gcc
+  endif
+else
 CC      ?= gcc
+endif
 CFLAGS  ?= -g -O2
 WARN    ?= -Wall -Wextra -Wno-unused-parameter
-PICFLAG ?= -fPIC
+ifeq ($(OS),Windows_NT)
+  PICFLAG ?=
+  GLIB_ADDITIONAL ?= gobject-2.0
+  EXT := dll
+  WIN_LIBS ?= -lws2_32 -lnetapi32 -luuid
+  PURPLE_ADDITIONAL ?= -IC:/msys64/ucrt64/include
+else
+  PICFLAG ?= -fPIC
+  GLIB_ADDITIONAL ?=
+  EXT := so
+  WIN_LIBS ?=
+  PURPLE_ADDITIONAL ?=
+endif
 
 BAREV_BUILD_ID ?= $(shell git describe --tags --always --dirty 2>/dev/null || \
 	dpkg-parsechangelog -SVersion 2>/dev/null || printf unknown)
@@ -20,15 +38,31 @@ ICON_SVG := $(if $(filter white,$(ICON_STYLE)),barev_white.svg,barev.svg)
 TELEPATHY_MANAGER_DIR ?= /usr/share/telepathy/managers
 INSTALL_HAZE_MANAGER ?= 0
 
-# Dependencies via pkg-config
-PURPLE_CFLAGS  := $(shell pkg-config --cflags purple)
+# Dependencies via pkg-config (Linux only)
+ifeq ($(OS),Windows_NT)
+W32_PURPLE_INC ?= /ucrt64/include
+W32_GTK_DIR    ?= $(GTK_DIR)
+W32_XML_INC    ?= /ucrt64/include/libxml2
+W32_LIBDIR     ?= $(CURDIR)/w32lib
+
+PURPLE_CFLAGS  := -I$(W32_PURPLE_INC)/libpurple -I$(W32_PURPLE_INC)/libpurple/win32 -idirafter $(W32_PURPLE_INC)
+PURPLE_LIBS    := -L$(W32_LIBDIR) -lpurple
+
+GLIB_CFLAGS    := -I$(W32_GTK_DIR)/include/glib-2.0 -I$(W32_GTK_DIR)/lib/glib-2.0/include
+GLIB_LIBS      := -L$(W32_GTK_DIR)/lib -L$(W32_LIBDIR) -lglib-2.0 -lgobject-2.0 -lintl
+
+LIBXML_CFLAGS  := -I$(W32_XML_INC)
+LIBXML_LIBS    := -L$(W32_LIBDIR) -lxml2
+else
+PURPLE_CFLAGS  := $(shell pkg-config --cflags purple) $(PURPLE_ADDITIONAL)
 PURPLE_LIBS    := $(shell pkg-config --libs purple)
 
 GLIB_CFLAGS    := $(shell pkg-config --cflags glib-2.0)
-GLIB_LIBS      := $(shell pkg-config --libs glib-2.0)
+GLIB_LIBS      := $(shell pkg-config --libs glib-2.0 $(GLIB_ADDITIONAL))
 
 LIBXML_CFLAGS  := $(shell pkg-config --cflags libxml-2.0)
 LIBXML_LIBS    := $(shell pkg-config --libs libxml-2.0)
+endif
 
 # Optional GStreamer / voice-video support.
 # Auto-detected if USE_VV is unset; pass USE_VV=1 to force on, USE_VV=0 to force off.
@@ -73,9 +107,9 @@ CFLAGS += $(WARN) $(PICFLAG) \
           $(PURPLE_CFLAGS) $(GLIB_CFLAGS) $(LIBXML_CFLAGS) $(AVAHI_CFLAGS) \
           -DBAREV_BUILD_ID=\"$(BAREV_BUILD_ID)\"
 
-LDLIBS  = $(PURPLE_LIBS) $(GLIB_LIBS) $(LIBXML_LIBS) $(AVAHI_LIBS) $(LDLIBS_EXTRA)
+LDLIBS  = $(PURPLE_LIBS) $(GLIB_LIBS) $(LIBXML_LIBS) $(AVAHI_LIBS) $(LDLIBS_EXTRA) $(WIN_LIBS)
 
-PLUGIN  = libbarev.so
+PLUGIN  = libbarev.$(EXT)
 
 JINGLE_SRCS = \
   jingle/jingle.c \
@@ -96,7 +130,29 @@ SRCS = \
   bonjour_ft.c \
   $(JINGLE_SRCS)
 
-OBJS = $(SRCS:.c=.o)
+# Windows-specific: Windres for attaching resource file to the plugin
+RC_OBJ   :=
+RC_FLAGS :=
+ifeq ($(OS),Windows_NT)
+  ifneq ($(wildcard barev.rc),)
+    CC_PATH := $(shell command -v $(CC) 2>/dev/null)
+    CC_DIR  := $(dir $(CC_PATH))
+    ifeq ($(strip $(WINDRES)),)
+      WINDRES := $(firstword $(wildcard $(CC_DIR)i686-w64-mingw32-windres.exe $(CC_DIR)windres.exe))
+      ifeq ($(WINDRES),)
+        WINDRES  := $(shell command -v windres 2>/dev/null)
+        RC_FLAGS := -F pe-i386
+      endif
+    endif
+    ifneq ($(WINDRES),)
+      RC_OBJ := barev_res.o
+    else
+      $(warning windres not found (CC_DIR=$(CC_DIR)), building without barev.rc)
+    endif
+  endif
+endif
+
+OBJS = $(SRCS:.c=.o) $(RC_OBJ)
 
 .PHONY: all clean install uninstall FORCE
 
@@ -107,6 +163,9 @@ $(PLUGIN): $(OBJS)
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
+
+barev_res.o: barev.rc $(wildcard *.h)
+	$(WINDRES) $(RC_FLAGS) --include-dir=. -i barev.rc -o $@ -O coff
 
 # The source revision can change without barev.c's timestamp changing.
 barev.o: FORCE
@@ -127,6 +186,17 @@ endif
 	install -m 644 "logo/22/$(ICON_PNG)" "$(DESTDIR)$(ICON_DIR)/22/barev.png"
 	install -m 644 "logo/48/$(ICON_PNG)" "$(DESTDIR)$(ICON_DIR)/48/barev.png"
 	install -m 644 "logo/scalable/$(ICON_SVG)" "$(DESTDIR)$(ICON_DIR)/scalable/barev.svg"
+
+PIDGIN_WIN_DIR ?= C:/Program Files (x86)/Pidgin
+
+install-win: $(PLUGIN)
+	install -d "$(PIDGIN_WIN_DIR)/plugins"
+	install -m 644 $(PLUGIN) "$(PIDGIN_WIN_DIR)/plugins/$(PLUGIN)"
+	install -d "$(PIDGIN_WIN_DIR)/pixmaps/pidgin/protocols/16" "$(PIDGIN_WIN_DIR)/pixmaps/pidgin/protocols/22" "$(PIDGIN_WIN_DIR)/pixmaps/pidgin/protocols/48" "$(PIDGIN_WIN_DIR)/pixmaps/pidgin/protocols/scalable"
+	install -m 644 "logo/16/$(ICON_PNG)" "$(PIDGIN_WIN_DIR)/pixmaps/pidgin/protocols/16/barev.png"
+	install -m 644 "logo/22/$(ICON_PNG)" "$(PIDGIN_WIN_DIR)/pixmaps/pidgin/protocols/22/barev.png"
+	install -m 644 "logo/48/$(ICON_PNG)" "$(PIDGIN_WIN_DIR)/pixmaps/pidgin/protocols/48/barev.png"
+	install -m 644 "logo/scalable/$(ICON_SVG)" "$(PIDGIN_WIN_DIR)/pixmaps/pidgin/protocols/scalable/barev.svg"
 
 uninstall:
 	rm -f "$(DESTDIR)$(PLUGIN_DIR)/$(PLUGIN)"

@@ -2,19 +2,31 @@
 #define _PURPLE_INTERNAL_H_
 
 /* Public libpurple API */
+#if !defined(RC_INVOKED)
 #include <purple.h>
+#endif
 
 /* Glib for gboolean */
+#if !defined(RC_INVOKED)
 #include <glib.h>
+#endif
 
 /* POSIX / networking stuff */
 #include <sys/types.h>
+#if defined(_WIN32)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+/* -- Win32-specfic declarations: some stuff is explicitly missing from Windows Sockets, so we should put 'em too -- */
+#define MSG_NOSIGNAL 0
+#define MSG_DONTWAIT 0
+#else
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <pwd.h>
-#include <unistd.h>
 #include <fcntl.h>
+#endif
+#include <unistd.h>
 
 /* ----- Things bonjour/jabber expect from internal.h ----- */
 
@@ -66,6 +78,20 @@ typedef union
 static inline gboolean
 _purple_network_set_common_socket_flags(int fd)
 {
+
+	#if defined(_WIN32)
+	/* Win32 API doesn't have `fcntl`. So we are gonna use the alternatives */
+	u_long nonblock = 1;
+
+    /* Make socket non-blocking */
+	if (ioctlsocket((SOCKET)fd, FIONBIO, &nonblock) != 0)
+		return FALSE;
+
+    /* Set close-on-exec */
+	if (!SetHandleInformation((HANDLE)(SOCKET)fd, HANDLE_FLAG_INHERIT, 0))
+		return FALSE;
+
+	#else
     int flags;
 
     /* Make socket non-blocking */
@@ -81,8 +107,34 @@ _purple_network_set_common_socket_flags(int fd)
         return FALSE;
     if (fcntl(fd, F_SETFD, flags | FD_CLOEXEC) == -1)
         return FALSE;
+	#endif
 
     return TRUE;
+}
+
+/**
+ * @brief Error handlers.
+ * These are intended to properly catch all errors on all platforms, because Windows Sockets
+ * give different stack of errors in contrary of Linux standard `errno`.
+ */
+static inline int barev_sock_transient()
+{
+#if defined(_WIN32)
+    int w = WSAGetLastError();
+    return w == WSAEWOULDBLOCK || w == WSAEINPROGRESS || w == WSAEINTR;
+#else
+    return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINPROGRESS || errno == EINTR;
+#endif
+}
+
+static inline int barev_connect_pending()
+{
+#if defined(_WIN32)
+    int w = WSAGetLastError();
+    return w == WSAEWOULDBLOCK || w == WSAEINPROGRESS || w == WSAEALREADY;
+#else
+    return errno = EINPROGRESS;
+#endif
 }
 
 #endif /* _PURPLE_INTERNAL_H_ */
