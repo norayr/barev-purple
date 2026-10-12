@@ -21,9 +21,14 @@
  */
 #include <errno.h>
 #include <sys/types.h>
+#if defined(_WIN32)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#endif
 
 #include "internal.h"
 #include "util.h"
@@ -35,6 +40,18 @@
 #include "barev.h"
 #include "bonjour_ft.h"
 #include "cipher.h"
+
+#ifdef _WIN32
+  #define ft_close(fd) closesocket((SOCKET)(fd))
+  #define ft_read(fd, b, n) recv((SOCKET)(fd), (char *)(b), (int)(n), 0)
+  #define ft_write(fd, b, n) send((SOCKET)(fd), (const char *)(b), (int)(n), 0)
+  #define ft_would_block() (WSAGetLastError() == WSAEWOULDBLOCK || WSAGetLastError() == WSAEINTR)
+#else
+  #define ft_close(fd) close(fd)
+  #define ft_read(fd, b, n) read(fd, b, n)
+  #define ft_write(fd, b, n) write(fd, b, n)
+  #define ft_would_block() (errno == EAGAIN || errno == EWOULDBLOCK)
+#endif
 
 #define BAREV_FT_PORT_MIN 50000
 #define BAREV_FT_PORT_MAX 50049
@@ -132,10 +149,10 @@ _wait_for_socket_close(gpointer data, gint source, PurpleInputCondition cond)
 
   ret = recv(source, buf, 1, 0);
 
-  if (ret == 0 || (ret == -1 && !(errno == EAGAIN || errno == EWOULDBLOCK))) {
+  if (ret == 0 || (ret == -1 && !ft_would_block())) {
     purple_debug_info("barev", "Client completed receiving; closing server socket.\n");
     purple_input_remove(sc->handle);
-    close(sc->fd);
+    ft_close(sc->fd);
     g_free(sc);
   }
 }
@@ -829,15 +846,19 @@ bonjour_sock5_request_cb(gpointer data, gint source, PurpleInputCondition cond)
   switch(xf->sock5_req_state){
   case 0x00:
     acceptfd = accept(source, NULL, 0);
-    if(acceptfd == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+    if(acceptfd == -1 && ft_would_block()) {
 
     } else if(acceptfd == -1) {
       /* This should cancel the ft */
+      #if defined(_WIN32)
+      purple_debug_error("barev", "Error accepting incoming SOCKS5 connection. (%d)\n", WSAGetLastError());
+      #else
       purple_debug_error("barev", "Error accepting incoming SOCKS5 connection. (%d)\n", errno);
+      #endif
 
       purple_input_remove(xfer->watcher);
       xfer->watcher = 0;
-      close(source);
+      ft_close(source);
       purple_xfer_cancel_remote(xfer);
       return;
     } else {
@@ -845,7 +866,7 @@ bonjour_sock5_request_cb(gpointer data, gint source, PurpleInputCondition cond)
 
       _purple_network_set_common_socket_flags(acceptfd);
       purple_input_remove(xfer->watcher);
-      close(source);
+      ft_close(source);
       xfer->watcher = purple_input_add(acceptfd, PURPLE_INPUT_READ,
                bonjour_sock5_request_cb, xfer);
       xf->sock5_req_state++;
@@ -854,13 +875,13 @@ bonjour_sock5_request_cb(gpointer data, gint source, PurpleInputCondition cond)
     break;
   case 0x01:
     xfer->fd = source;
-    len = read(source, xf->rx_buf + xf->rxlen, 3);
-    if(len < 0 && errno == EAGAIN)
+    len = ft_read(source, xf->rx_buf + xf->rxlen, 3);
+    if(len < 0 && ft_would_block())
       return;
     else if(len <= 0){
       purple_input_remove(xfer->watcher);
       xfer->watcher = 0;
-      close(source);
+      ft_close(source);
       purple_xfer_cancel_remote(xfer);
       return;
     } else {
@@ -875,13 +896,13 @@ bonjour_sock5_request_cb(gpointer data, gint source, PurpleInputCondition cond)
   case 0x02:
     xf->tx_buf[0] = 0x05;
     xf->tx_buf[1] = 0x00;
-    len = write(source, xf->tx_buf, 2);
-    if (len < 0 && errno == EAGAIN)
+    len = ft_write(source, xf->tx_buf, 2);
+    if (len < 0 && ft_would_block())
       return;
     else if (len < 0) {
       purple_input_remove(xfer->watcher);
       xfer->watcher = 0;
-      close(source);
+      ft_close(source);
       purple_xfer_cancel_remote(xfer);
       return;
     } else {
@@ -893,7 +914,7 @@ bonjour_sock5_request_cb(gpointer data, gint source, PurpleInputCondition cond)
     }
     break;
   case 0x03:
-    len = read(source, xf->rx_buf + xf->rxlen, 20);
+    len = ft_read(source, xf->rx_buf + xf->rxlen, 20);
     if(len<=0){
     } else {
       purple_input_remove(xfer->watcher);
@@ -913,20 +934,20 @@ bonjour_sock5_request_cb(gpointer data, gint source, PurpleInputCondition cond)
     memcpy(xf->tx_buf + 5, xf->buddy_ip, strlen(xf->buddy_ip));
     xf->tx_buf[5+strlen(xf->buddy_ip)] = 0x00;
     xf->tx_buf[6+strlen(xf->buddy_ip)] = 0x00;
-    len = write(source, xf->tx_buf, 7 + strlen(xf->buddy_ip));
-    if (len < 0 && errno == EAGAIN) {
+    len = ft_write(source, xf->tx_buf, 7 + strlen(xf->buddy_ip));
+    if (len < 0 && ft_would_block()) {
       return;
     } else if (len < 0) {
       purple_input_remove(xfer->watcher);
       xfer->watcher = 0;
-      close(source);
+      ft_close(source);
       purple_xfer_cancel_remote(xfer);
       return;
     } else {
       purple_input_remove(xfer->watcher);
       xfer->watcher = 0;
       xf->rxlen = 0;
-      /*close(source);*/
+      /*ft_close(source);*/
       purple_xfer_start(xfer, source, NULL, -1);
     }
     break;
@@ -1046,7 +1067,7 @@ bonjour_bytestreams_init(PurpleXfer *xfer)
     //if (bind(sock, (struct sockaddr *)&addr6, sizeof(addr6)) < 0) {
     //    purple_debug_error("barev", "Barev: bind() failed for bytestream: %s\n",
     //                       g_strerror(errno));
-    //    close(sock);
+    //    ft_close(sock);
     //    purple_xfer_cancel_local(xfer);
     //    return;
     //}
@@ -1067,7 +1088,7 @@ bonjour_bytestreams_init(PurpleXfer *xfer)
         if (bind(sock, (struct sockaddr *)&addr6, sizeof(addr6)) < 0) {
             purple_debug_error("barev", "Barev: bind() failed for bytestream: %s\n",
                                g_strerror(errno));
-            close(sock);
+            ft_close(sock);
             purple_xfer_cancel_local(xfer);
             return;
         }
@@ -1076,7 +1097,7 @@ bonjour_bytestreams_init(PurpleXfer *xfer)
     if (listen(sock, 1) < 0) {
         purple_debug_error("barev", "Barev: listen() failed for bytestream: %s\n",
                            g_strerror(errno));
-        close(sock);
+        ft_close(sock);
         purple_xfer_cancel_local(xfer);
         return;
     }
@@ -1085,7 +1106,7 @@ bonjour_bytestreams_init(PurpleXfer *xfer)
     if (getsockname(sock, (struct sockaddr *)&addr6, &addrlen) < 0) {
         purple_debug_error("barev", "Barev: getsockname() failed for bytestream: %s\n",
                            g_strerror(errno));
-        close(sock);
+        ft_close(sock);
         purple_xfer_cancel_local(xfer);
         return;
     }

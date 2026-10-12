@@ -26,7 +26,14 @@
 #include <errno.h>
 #include <net/if.h>
 #include <sys/ioctl.h>
+#if defined(_WIN32)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <iphlpapi.h>
+#include <iptypes.h>
+#else
 #include <sys/socket.h>
+#endif
 #include <netdb.h>
 #include <ifaddrs.h>
 #include <netinet/in.h>
@@ -81,6 +88,147 @@
 
 #ifndef HAVE_GETIFADDRS
 #define HAVE_GETIFADDRS 1
+#endif
+
+#if defined(_WIN32)
+
+struct ifaddrs {
+	struct ifaddrs  *ifa_next;
+	char            *ifa_name; /* UTF-8 friendly name */
+	unsigned int     ifa_flags;
+	struct sockaddr *ifa_addr;
+	struct sockaddr *ifa_netmask;
+};
+
+static inline void
+freeifaddrs(struct ifaddrs *ifa)
+{
+    while (ifa) {
+        struct ifaddrs *next = ifa->ifa_next;
+        free(ifa);
+        ifa = next;
+    }
+}
+
+static inline struct ifaddrs *
+_win_ifaddrs_add(struct ifaddrs ***tail, const struct sockaddr *sa, int salen,
+                 const struct sockaddr *mask, int masklen,
+                 unsigned int flags, const char *name)
+{
+    size_t slot = sizeof(struct sockaddr_storage);
+    struct ifaddrs *n = (struct ifaddrs *)calloc(1, sizeof(struct ifaddrs) + 2 * slot + strlen(name) + 1);
+    if (!n)
+        return NULL;
+
+    n->ifa_addr = (struct sockaddr *)(n + 1);
+    n->ifa_netmask = (struct sockaddr *)((char *)n->ifa_addr + slot);
+    n->ifa_name = (char *)n->ifa_netmask + slot;
+    memcpy(n->ifa_addr, sa, salen);
+    if (mask)
+        memcpy(n->ifa_netmask, mask, masklen);
+    strcpy(n->ifa_name, name);
+    n->ifa_flags = flags;
+    **tail = n;
+    *tail = &n->ifa_next;
+
+    return n;
+}
+
+static inline int
+getifaddrs(struct ifaddrs **ifap)
+{
+    struct ifaddrs *head = NULL, **tail = &head;
+    SOCKET s;
+    DWORD bytes = 0;
+    int got_any = 0;
+
+    *ifap = NULL;
+
+    /* IPv4 */
+    s = socket(AF_INET, SOCK_DGRAM, 0);
+    if (s != INVALID_SOCKET) {
+        INTERFACE_INFO info[64];
+        if (WSAIoctl(s, SIO_GET_INTERFACE_LIST, NULL, 0, info, sizeof(info), &bytes, NULL, NULL) == 0) {
+            unsigned int i, n = bytes / sizeof(INTERFACE_INFO);
+            for (i = 0; i < n; i++) {
+                char name[32];
+                if (info[i].iiAddress.Address.sa_family != AF_INET)
+                    continue;
+                snprintf(name, sizeof(name), "if%u", i + 1);
+                if (!_win_ifaddrs_add(&tail,
+                        (struct sockaddr *)&info[i].iiAddress.AddressIn,
+                        sizeof(struct sockaddr_in),
+                        (struct sockaddr *)&info[i].iiNetmask.AddressIn,
+                        sizeof(struct sockaddr_in),
+                        (unsigned int)info[i].iiFlags, name)) {
+                    closesocket(s);
+                    freeifaddrs(head);
+                    return -1;
+                }
+                got_any = 1;
+            }
+        }
+        closesocket(s);
+    }
+
+    /* IPv6 */
+    s = socket(AF_INET6, SOCK_DGRAM, 0);
+    if (s != INVALID_SOCKET) {
+        char buf[4096];
+        SOCKET_ADDRESS_LIST *list = (SOCKET_ADDRESS_LIST *)buf;
+        if (WSAIoctl(s, SIO_ADDRESS_LIST_QUERY, NULL, 0, buf, sizeof(buf), &bytes, NULL, NULL) == 0) {
+            INT i;
+            for (i = 0; i < list->iAddressCount; i++) {
+                struct sockaddr *sa = list->Address[i].lpSockaddr;
+                struct sockaddr_in6 mask;
+                char name[32];
+                unsigned int flags = IFF_UP | IFF_MULTICAST;
+                int k;
+
+                if (!sa || sa->sa_family != AF_INET6 ||
+                    list->Address[i].iSockaddrLength < (int)sizeof(struct sockaddr_in6))
+                    continue;
+                if (IN6_IS_ADDR_LOOPBACK(&((struct sockaddr_in6 *)sa)->sin6_addr))
+                    flags |= IFF_LOOPBACK;
+
+                memset(&mask, 0, sizeof(mask));
+                mask.sin6_family = AF_INET6;
+                for (k = 0; k < 8; k++)
+                    mask.sin6_addr.s6_addr[k] = 0xFF;
+
+                snprintf(name, sizeof(name), "if%lu", (unsigned long)((struct sockaddr_in6 *)sa)->sin6_scope_id);
+                if (!_win_ifaddrs_add(&tail, sa, sizeof(struct sockaddr_in6),
+                                      (struct sockaddr *)&mask, sizeof(mask),
+                                      flags, name)) {
+                    closesocket(s);
+                    freeifaddrs(head);
+                    return -1;
+                }
+                got_any = 1;
+            }
+        }
+        closesocket(s);
+    }
+
+    *ifap = head;
+    return got_any ? 0 : -1;
+}
+
+/* Win32-specific helper functionality: some functions are not existing in Windows Sockets API, so we should implement remaining ones by ourselves */
+
+static inline unsigned int
+if_nametoindex(const char *name)
+{
+    char *end = NULL;
+    unsigned long idx;
+
+    if (!name || !*name)
+        return 0;
+
+    idx = strtoul(name, &end, 10);
+    return (end && *end == '\0') ? (unsigned int)idx : 0;
+}
+
 #endif
 
 /* TODO: specify version='1.0' and send stream features */
@@ -1648,7 +1796,7 @@ _send_data_write_cb(gpointer data, gint source, PurpleInputCondition cond)
 
   ret = send(bconv->socket, bconv->tx_buf->outptr, writelen, MSG_NOSIGNAL);
 
-  if (ret < 0 && errno == EAGAIN)
+  if (ret < 0 && barev_sock_transient())
     return;
   else if (ret <= 0) {
     PurpleConversation *conv = NULL;
@@ -1709,7 +1857,7 @@ static gint _send_data(PurpleBuddy *pb, char *message)
     ret = send(bconv->socket, message, len, MSG_NOSIGNAL);
   }
 
-  if (ret == -1 && errno == EAGAIN)
+  if (ret == -1 && barev_sock_transient())
     ret = 0;
   else if (ret <= 0) {
     PurpleConversation *conv;
@@ -1887,7 +2035,7 @@ _client_socket_handler(gpointer data, gint socket, PurpleInputCondition conditio
   /* Read the data from the socket */
   if ((len = recv(socket, message, sizeof(message) - 1, 0)) < 0) {
     /* There have been an error reading from the socket */
-    if (len != -1 || errno != EAGAIN) {
+    if (len != -1 || !barev_sock_transient()) {
       const char *err = g_strerror(errno);
 
       purple_debug_warning("barev",
@@ -1954,7 +2102,7 @@ _start_stream(gpointer data, gint source, PurpleInputCondition condition)
   /* Start Stream */
   ret = send(source, ss->msg, len, MSG_NOSIGNAL);
 
-  if (ret == -1 && errno == EAGAIN)
+  if (ret == -1 && barev_sock_transient())
     return;
   else if (ret <= 0) {
     const char *err = g_strerror(errno);
@@ -2020,7 +2168,7 @@ static gboolean bonjour_jabber_send_stream_init(BonjourJabberConversation *bconv
   /* Start the stream */
   ret = send(client_socket, stream_start, len, MSG_NOSIGNAL);
 
-  if (ret == -1 && errno == EAGAIN)
+  if (ret == -1 && barev_sock_transient())
     ret = 0;
   else if (ret <= 0) {
     const char *err = g_strerror(errno);
@@ -3100,7 +3248,7 @@ _find_or_start_conversation(BonjourJabber *jdata, const gchar *to)
                 }
 
                 if (connect(sock, (struct sockaddr*)&addr6, sizeof(addr6)) == 0 ||
-                    (errno == EINPROGRESS)) {
+                    !barev_connect_pending()) {
                     /* Connection successful or in progress */
                     BonjourJabberConversation *bconv;
 
