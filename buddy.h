@@ -21,6 +21,7 @@
 
 #include "account.h"
 #include "jabber.h"
+#include "avatar-cache.h"
 
 typedef struct _BonjourBuddy
 {
@@ -32,6 +33,7 @@ typedef struct _BonjourBuddy
 
 	gchar *first;
 	gchar *phsh;
+	BarevAvatarRequest avatar_request;
 	gchar *status;
 	gchar *email;
 	gchar *last;

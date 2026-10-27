@@ -395,6 +395,7 @@ bonjour_buddy_delete(BonjourBuddy *buddy)
   }
   g_free(buddy->first);
   g_free(buddy->phsh);
+  barev_avatar_request_clear(&buddy->avatar_request);
   g_free(buddy->status);
   g_free(buddy->email);
   g_free(buddy->last);
