@@ -691,11 +691,9 @@ barev_handle_vcard_iq(xmlnode *packet, PurpleBuddy *pb)
                 if (fn && *fn) purple_notify_user_info_add_pair_plaintext(info, "Full Name", fn);
 
                 {
-                    PurplePresence *presence = purple_buddy_get_presence(pb);
-                    PurpleStatus *status = purple_presence_get_active_status(presence);
-                    const char *message = status ? purple_status_get_attr_string(status, "message") : NULL;
-                    if (message && *message)
-                        purple_notify_user_info_add_pair_plaintext(info, "Status", message);
+                    BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
+                    if (bb && bb->msg && *bb->msg)
+                        purple_notify_user_info_add_pair_plaintext(info, "Status", bb->msg);
                 }
 
                 /* show avatar hash we currently track (if any) */
