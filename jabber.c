@@ -3256,7 +3256,7 @@ _find_or_start_conversation(BonjourJabber *jdata, const gchar *to)
                 }
 
                 if (connect(sock, (struct sockaddr*)&addr6, sizeof(addr6)) == 0 ||
-                    !barev_connect_pending()) {
+                    barev_connect_pending()) {
                     /* Connection successful or in progress */
                     BonjourJabberConversation *bconv;
 
