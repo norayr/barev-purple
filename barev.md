@@ -8,6 +8,39 @@ Barev is a simplified peer-to-peer XMPP/Jabber protocol designed for Yggdrasil I
 
 ---
 
+## Encoded Barev addresses
+
+Contacts can be added as either `nick@IPv6` or
+`nick@<encoded>.barev.v6.alt`. For example, `nick@200::1` and
+`nick@ai-e.barev.v6.alt` identify the same contact. Existing IPv6 input and
+Haze's saved bare-nickname contacts continue to work. Nickname case remains
+significant; Pidgin aliases are independent local display labels and are preserved.
+
+**Get Info** shows the contact's IPv6 and full encoded **Barev address**, including
+when the contact is offline. While connected, choose **Accounts → your Barev
+account → My Barev address** to view and copy your own full address. The account
+action uses the current account's numeric wire identity. If you use a nondefault
+listening port, share that port separately; the encoded address contains only
+the IPv6 address. The default chat port remains 1337.
+
+Conversion is local to the plugin and requires no DNS queries or additional
+software. Encoded input is stored and sent as a numeric IPv6 identity, preserving
+compatibility with older peers. Contact lookup treats both address spellings as
+the same identity.
+
+The label follows the [v6.alt scheme](https://modules.prosody.im/mod_s2s_v6mesh.html):
+26 lowercase, unpadded RFC 4648 base32 characters encoding the 16 IPv6 bytes,
+with the first longest interior run of at least two `a` characters replaced by
+`-`, followed by `.barev.v6.alt`. Input accepts uppercase hostnames, an optional
+final dot, uncompressed labels, and alternate valid zero-run compression.
+Multiple hyphens, invalid characters, nonzero base32 padding bits, and encoded
+contact addresses outside Yggdrasil's `200::/7` range are rejected.
+
+The local codec is in `address.c`. Run `make test-addresses` for its independent
+reference, malformed-input, information-window, alias, and persistence tests.
+
+---
+
 ## Core Concepts
 
 ### 1. Basic Architecture

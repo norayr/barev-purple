@@ -348,6 +348,9 @@ bonjour_buddies_load_from_blist(PurpleAccount *account)
     int             port;
     BonjourBuddy   *bb;
 
+    if (!barev_prepare_buddy(pb))
+      continue;
+
     /* Already initialised (e.g. by the migration step) — skip */
     if (purple_buddy_get_protocol_data(pb) != NULL)
       continue;

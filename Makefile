@@ -127,6 +127,7 @@ SRCS = \
   barev.c \
   buddy.c \
   avatar-cache.c \
+  address.c \
   jabber.c \
   parser.c \
   bonjour_ft.c \
@@ -187,6 +188,14 @@ tests/formatting-test: tests/formatting-test.c jabber.h
 .PHONY: test-formatting
 test-formatting: $(PLUGIN) tests/formatting-test
 	python3 "$(SOURCE_DIR)/tests/check-formatting.py" "$(CURDIR)/tests/formatting-test" "$(abspath $(PLUGIN))"
+
+tests/address-test: tests/address-test.c $(wildcard $(SOURCE_DIR)/*.h)
+	mkdir -p tests
+	$(CC) $(CFLAGS) -I"$(SOURCE_DIR)" "$(SOURCE_DIR)/tests/address-test.c" -o "$@" $(LDLIBS) $(shell pkg-config --libs gmodule-2.0)
+
+.PHONY: test-addresses
+test-addresses: $(PLUGIN) tests/address-test
+	python3 "$(SOURCE_DIR)/tests/check-addresses.py" "$(CURDIR)/tests/address-test" "$(abspath $(PLUGIN))"
 FORCE:
 
 install: $(PLUGIN)

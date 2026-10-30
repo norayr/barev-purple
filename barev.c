@@ -38,6 +38,7 @@
 #include <version.h>
 
 #include "barev.h"
+#include "address.h"
 #include "jabber.h"
 #include "jingle/jingle.h"
 #ifdef USE_VV
@@ -115,6 +116,7 @@ static void bonjour_login(PurpleAccount *account);
 static void bonjour_login_barev(PurpleAccount *account);
 
 static void bonjour_get_info(PurpleConnection *gc, const char *who);
+static GList *barev_account_actions(PurplePlugin *plugin, gpointer context);
 
 /* Structure for parsing manual buddy format */
 typedef struct {
@@ -493,6 +495,10 @@ barev_load_persistent_contacts(PurpleAccount *account)
     }
 
     if (!strchr(jid, '@')) { g_free(jid); continue; }
+    {
+      char *numeric = barev_address_identity(jid, FALSE);
+      if (numeric) { g_free(jid); jid = numeric; }
+    }
 
     const char *at = strchr(jid, '@');
     char *nick = g_strndup(jid, (gsize)(at - jid));
@@ -712,6 +718,86 @@ get_localpart(const char *name)
     return at ? g_strndup(name, at - name) : g_strdup(name);
 }
 
+/* Keep encoded input out of the numeric wire and persisted socket addresses. */
+gboolean
+barev_prepare_buddy(PurpleBuddy *buddy)
+{
+    const char *name = purple_buddy_get_name(buddy);
+    const char *at = name ? strchr(name, '@') : NULL;
+    char *lower, *numeric;
+    gboolean candidate;
+    if (!at) return TRUE; /* Haze also restores bare nicknames. */
+    lower = g_ascii_strdown(at+1, -1);
+    candidate = strstr(lower, ".v6.alt") != NULL;
+    g_free(lower);
+    if (!candidate) return TRUE;
+    numeric = barev_address_identity(name, FALSE);
+    if (!numeric) return FALSE;
+    purple_blist_rename_buddy(buddy, numeric);
+    g_free(numeric);
+    return TRUE;
+}
+
+static const char *
+barev_normalize(const PurpleAccount *account, const char *name)
+{
+    static char output[1024];
+    char *numeric = barev_address_identity(name, FALSE), *normalized;
+    (void)account;
+    if (!numeric) return NULL; /* Preserve libpurple's legacy normalization. */
+    normalized = g_utf8_normalize(numeric, -1, G_NORMALIZE_DEFAULT);
+    g_free(numeric);
+    if (!normalized) return NULL;
+    g_strlcpy(output, normalized, sizeof(output));
+    g_free(normalized);
+    return output;
+}
+
+void
+barev_address_info(PurpleNotifyUserInfo *info, const char *who, BonjourBuddy *buddy)
+{
+    char *jid = NULL, *numeric, *encoded;
+    if (!who) return;
+    if (!strchr(who, '@') && buddy && buddy->ips && buddy->ips->data)
+        jid = g_strdup_printf("%s@%s", who, (char *)buddy->ips->data);
+    numeric = barev_address_identity(jid ? jid : who, FALSE);
+    encoded = numeric ? barev_address_identity(numeric, TRUE) : NULL;
+    if (encoded) {
+        purple_notify_user_info_add_pair_plaintext(info, "IPv6", strchr(numeric, '@')+1);
+        purple_notify_user_info_add_pair_plaintext(info, "Barev address", encoded);
+    }
+    g_free(encoded);
+    g_free(numeric);
+    g_free(jid);
+}
+
+static void
+barev_my_address(PurplePluginAction *action)
+{
+    PurpleConnection *gc = action->context;
+    BonjourData *bd = purple_connection_get_protocol_data(gc);
+    PurpleNotifyUserInfo *info;
+    char *encoded = bd ? barev_address_identity(bd->jid, TRUE) : NULL;
+    if (!encoded) {
+        purple_notify_error(gc, _("My Barev address"), _("No Yggdrasil address selected"),
+                            _("Connect this account using a Yggdrasil IPv6 address first."));
+        return;
+    }
+    g_free(encoded);
+    info = purple_notify_user_info_new();
+    purple_notify_user_info_add_pair_plaintext(info, "JID", bd->jid);
+    barev_address_info(info, bd->jid, NULL);
+    purple_notify_userinfo(gc, bd->jid, info, NULL, NULL);
+    purple_notify_user_info_destroy(info);
+}
+
+static GList *
+barev_account_actions(PurplePlugin *plugin, gpointer context)
+{
+    (void)plugin; (void)context;
+    return g_list_append(NULL, purple_plugin_action_new(_("My Barev address"), barev_my_address));
+}
+
 static void
 barev_save_ip_to_account(PurpleAccount *account, const char *name,
                           const char *ip, int port)
@@ -731,7 +817,14 @@ barev_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group)
 {
     BonjourBuddy *bb;
     BarevBuddyInfo *info;
-    const char *full_buddy_name = purple_buddy_get_name(buddy);
+    const char *full_buddy_name;
+
+    if (!barev_prepare_buddy(buddy)) {
+        purple_notify_error(gc, _("Barev contact"), _("Invalid encoded Barev address"),
+            _("Use nick@<encoded>.barev.v6.alt or the existing nick@IPv6 format."));
+        return;
+    }
+    full_buddy_name = purple_buddy_get_name(buddy);
 
     purple_debug_info("barev", "Barev: adding buddy %s\n", full_buddy_name);
 
@@ -759,7 +852,8 @@ barev_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group)
         if (info->ipv6_address)
             bb->ips = g_slist_append(NULL, g_strdup(info->ipv6_address));
         bb->first = g_strdup(info->nick);
-        purple_blist_alias_buddy(buddy, info->nick);
+        if (!purple_buddy_get_local_buddy_alias(buddy))
+            purple_blist_alias_buddy(buddy, info->nick);
         bonjour_buddy_save_to_blist(buddy, info->ipv6_address, info->port);
         if (info->ipv6_address)
             barev_save_ip_to_account(gc->account, full_buddy_name,
@@ -1511,7 +1605,7 @@ static PurplePluginProtocolInfo prpl_info =
   bonjour_rename_group,                                    /* rename_group */
   NULL,                                                    /* buddy_free */
   bonjour_convo_closed,                                    /* convo_closed */
-  NULL,                                                    /* normalize */
+  barev_normalize,                                         /* normalize */
   bonjour_set_buddy_icon,                                  /* set_buddy_icon */
   NULL,                                                    /* remove_group */
   NULL,                                                    /* get_cb_real_name */
@@ -1577,7 +1671,7 @@ static PurplePluginInfo info =
   NULL,                                             /**< ui_info        */
   &prpl_info,                                       /**< extra_info     */
   NULL,                                             /**< prefs_info     */
-  NULL,
+  barev_account_actions,                                   /**< actions        */
 
   /* padding */
   NULL,
@@ -1791,6 +1885,7 @@ bonjour_get_info(PurpleConnection *gc, const char *who)
     /* No stream: show whatever we know locally */
     info = purple_notify_user_info_new();
     purple_notify_user_info_add_pair_plaintext(info, "JID", who);
+    barev_address_info(info, who, bb);
 
     if (bb) {
         if (bb->status)

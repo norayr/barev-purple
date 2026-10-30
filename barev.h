@@ -28,6 +28,8 @@
 
 #include "internal.h"
 #include "jabber.h"
+#include "buddy.h"
+#include <notify.h>
 
 #define BONJOUR_GROUP_NAME _("Barev")
 #define BONJOUR_PROTOCOL_NAME "barev"
@@ -56,5 +58,7 @@ typedef struct _BonjourData
  */
 const char *bonjour_get_jid(PurpleAccount *account);
 void barev_save_persistent_contacts(PurpleAccount *account);
+gboolean barev_prepare_buddy(PurpleBuddy *buddy);
+void barev_address_info(PurpleNotifyUserInfo *info, const char *who, BonjourBuddy *buddy);
 
 #endif /* _BONJOUR_H_ */
