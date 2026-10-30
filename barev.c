@@ -870,6 +870,8 @@ bonjour_login_barev(PurpleAccount *account)
   gc = purple_account_get_connection(account);
   g_return_if_fail(gc != NULL);
 
+  gc->flags |= PURPLE_CONNECTION_HTML;
+
   purple_debug_info("barev", "=== BAREV MODE STARTUP ===\n");
   purple_debug_info("barev", "Build: %s\n", barev_build_id);
   purple_debug_info("barev", "Account: %s\n",

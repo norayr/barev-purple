@@ -179,6 +179,14 @@ tests/avatar-cache-test: tests/avatar-cache-test.c avatar-cache.c avatar-cache.h
 .PHONY: test-avatar-cache
 test-avatar-cache: $(PLUGIN) tests/avatar-cache-test
 	python3 "$(SOURCE_DIR)/tests/check-avatar-cache.py" "$(CURDIR)/tests/avatar-cache-test" "$(abspath $(PLUGIN))"
+
+tests/formatting-test: tests/formatting-test.c jabber.h
+	mkdir -p tests
+	$(CC) $(CFLAGS) -I"$(SOURCE_DIR)" "$(SOURCE_DIR)/tests/formatting-test.c" -o "$@" $(LDLIBS) $(shell pkg-config --libs gmodule-2.0)
+
+.PHONY: test-formatting
+test-formatting: $(PLUGIN) tests/formatting-test
+	python3 "$(SOURCE_DIR)/tests/check-formatting.py" "$(CURDIR)/tests/formatting-test" "$(abspath $(PLUGIN))"
 FORCE:
 
 install: $(PLUGIN)
