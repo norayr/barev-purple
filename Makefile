@@ -5,6 +5,7 @@ ifeq ($(OS),Windows_NT)
 else
 CC      ?= gcc
 endif
+SOURCE_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 CFLAGS  ?= -g -O2
 WARN    ?= -Wall -Wextra -Wno-unused-parameter
 ifeq ($(OS),Windows_NT)
@@ -125,6 +126,7 @@ endif
 SRCS = \
   barev.c \
   buddy.c \
+  avatar-cache.c \
   jabber.c \
   parser.c \
   bonjour_ft.c \
@@ -169,6 +171,22 @@ barev_res.o: barev.rc $(wildcard *.h)
 
 # The source revision can change without barev.c's timestamp changing.
 barev.o: FORCE
+$(OBJS): $(wildcard $(SOURCE_DIR)/*.h $(SOURCE_DIR)/jingle/*.h)
+tests/avatar-cache-test: tests/avatar-cache-test.c avatar-cache.c avatar-cache.h
+	mkdir -p tests
+	$(CC) $(CFLAGS) -I"$(SOURCE_DIR)" "$(SOURCE_DIR)/tests/avatar-cache-test.c" "$(SOURCE_DIR)/avatar-cache.c" -o "$@" $(LDLIBS)
+
+.PHONY: test-avatar-cache
+test-avatar-cache: $(PLUGIN) tests/avatar-cache-test
+	python3 "$(SOURCE_DIR)/tests/check-avatar-cache.py" "$(CURDIR)/tests/avatar-cache-test" "$(abspath $(PLUGIN))"
+
+tests/formatting-test: tests/formatting-test.c jabber.h
+	mkdir -p tests
+	$(CC) $(CFLAGS) -I"$(SOURCE_DIR)" "$(SOURCE_DIR)/tests/formatting-test.c" -o "$@" $(LDLIBS) $(shell pkg-config --libs gmodule-2.0)
+
+.PHONY: test-formatting
+test-formatting: $(PLUGIN) tests/formatting-test
+	python3 "$(SOURCE_DIR)/tests/check-formatting.py" "$(CURDIR)/tests/formatting-test" "$(abspath $(PLUGIN))"
 FORCE:
 
 install: $(PLUGIN)

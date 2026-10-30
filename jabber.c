@@ -391,6 +391,10 @@ bonjour_jabber_request_vcard(PurpleBuddy *pb, gboolean for_userinfo)
     if (bconv->sent_stream_start != FULLY_SENT || !bconv->recv_stream_start)
         return FALSE;
 
+    if (!for_userinfo && (!barev_avatar_hash_valid(bb->phsh) ||
+        barev_avatar_request_pending(&bb->avatar_request, g_get_monotonic_time())))
+        return FALSE;
+
     account = purple_buddy_get_account(pb);
     from = bonjour_jabber_get_local_jid(bconv);
     to   = purple_buddy_get_name(pb);
@@ -422,6 +426,8 @@ bonjour_jabber_request_vcard(PurpleBuddy *pb, gboolean for_userinfo)
     xml = xmlnode_to_str(iq, NULL);
     xmlnode_free(iq);
 
+    if (!for_userinfo)
+        barev_avatar_request_begin(&bb->avatar_request, id, bb->phsh, g_get_monotonic_time());
     purple_debug_info("barev", "Barev: sending vCard GET to %s id=%s\n", to, id);
     _send_data(pb, xml);
 
@@ -525,13 +531,14 @@ barev_clear_buddy_icon(PurpleBuddy *pb, BonjourBuddy *bb)
 
     g_free(bb->phsh);
     bb->phsh = NULL;
+    barev_avatar_request_clear(&bb->avatar_request);
 
     if (account && name)
         purple_buddy_icons_set_for_user(account, name, NULL, 0, NULL);
 }
 
 static void
-barev_handle_vcard_result(PurpleBuddy *pb, xmlnode *vcard)
+barev_handle_vcard_result(PurpleBuddy *pb, xmlnode *vcard, const char *expected)
 {
     BonjourBuddy *bb;
     xmlnode *photo, *binval;
@@ -546,34 +553,30 @@ barev_handle_vcard_result(PurpleBuddy *pb, xmlnode *vcard)
     if (!bb) return;
 
     photo = xmlnode_get_child(vcard, "PHOTO");
-    if (!photo) {
-        barev_clear_buddy_icon(pb, bb);
-        return;
-    }
+    if (!photo) return;
 
     binval = xmlnode_get_child(photo, "BINVAL");
-    if (!binval) {
-        barev_clear_buddy_icon(pb, bb);
-        return;
-    }
+    if (!binval) return;
 
     b64 = xmlnode_get_data(binval);
     if (!b64 || !*b64) {
         g_free(b64);
-        barev_clear_buddy_icon(pb, bb);
         return;
     }
 
     raw = g_base64_decode(b64, &raw_len);
     g_free(b64);
 
-    if (!raw || raw_len == 0) {
+    if (!raw || raw_len == 0 || raw_len > BAREV_AVATAR_MAX_BYTES) {
         g_free(raw);
-        barev_clear_buddy_icon(pb, bb);
         return;
     }
 
     sha1 = barev_sha1_hex(raw, raw_len);
+    if (!sha1 || (expected && g_ascii_strcasecmp(sha1, expected))) {
+        purple_debug_warning("barev", "Avatar reply rejected: advertised SHA-1 mismatch.\n");
+        g_free(sha1); g_free(raw); return;
+    }
     if (sha1) {
         g_free(bb->phsh);
         bb->phsh = g_strdup(sha1);
@@ -591,15 +594,21 @@ barev_handle_vcard_iq(xmlnode *packet, PurpleBuddy *pb)
 {
     const char *type, *id;
     xmlnode *vcard;
+    BonjourBuddy *avatar_buddy;
 
     if (!packet || !pb) return FALSE;
     if (!purple_strequal(packet->name, "iq")) return FALSE;
 
-    vcard = xmlnode_get_child_with_namespace(packet, "vCard", BAREV_VCARD_NS);
-    if (!vcard) return FALSE;
-
     type = xmlnode_get_attrib(packet, "type");
     id   = xmlnode_get_attrib(packet, "id");
+    avatar_buddy = purple_buddy_get_protocol_data(pb);
+    if (type && !g_ascii_strcasecmp(type, "error") && avatar_buddy && id &&
+        !g_strcmp0(id, avatar_buddy->avatar_request.id)) {
+        barev_avatar_request_clear(&avatar_buddy->avatar_request);
+        return TRUE;
+    }
+    vcard = xmlnode_get_child_with_namespace(packet, "vCard", BAREV_VCARD_NS);
+    if (!vcard) return FALSE;
 
     if (type && !g_ascii_strcasecmp(type, "get")) {
         /* Peer requests our vCard: reply with PHOTO if we have an account icon */
@@ -665,12 +674,25 @@ barev_handle_vcard_iq(xmlnode *packet, PurpleBuddy *pb)
     }
 
     if (type && !g_ascii_strcasecmp(type, "result")) {
-        /* always update buddy icon */
-        barev_handle_vcard_result(pb, vcard);
+        BarevVcardReq *userinfo = id && barev_vcard_userinfo ? g_hash_table_lookup(barev_vcard_userinfo, id) : NULL;
+        gboolean avatar_reply = avatar_buddy &&
+            barev_avatar_request_pending(&avatar_buddy->avatar_request, g_get_monotonic_time()) &&
+            id && !g_strcmp0(id, avatar_buddy->avatar_request.id);
+        if (avatar_reply) {
+            gchar *expected = g_strdup(avatar_buddy->avatar_request.hash);
+            barev_avatar_request_clear(&avatar_buddy->avatar_request);
+            if (!g_strcmp0(expected, avatar_buddy->phsh)) barev_handle_vcard_result(pb, vcard, expected);
+            else if (barev_avatar_hash_valid(avatar_buddy->phsh)) bonjour_jabber_request_vcard(pb, FALSE);
+            g_free(expected);
+        } else if (userinfo && userinfo->account == purple_buddy_get_account(pb) &&
+                   purple_strequal(userinfo->who, purple_buddy_get_name(pb))) {
+            barev_handle_vcard_result(pb, vcard, avatar_buddy ? avatar_buddy->phsh : NULL);
+        }
 
         /* if this id was requested by "Get Info", show a userinfo popup */
-        if (id && barev_vcard_userinfo) {
-            BarevVcardReq *r = g_hash_table_lookup(barev_vcard_userinfo, id);
+        if (userinfo && userinfo->account == purple_buddy_get_account(pb) &&
+            purple_strequal(userinfo->who, purple_buddy_get_name(pb))) {
+            BarevVcardReq *r = userinfo;
             if (r) {
                 PurpleConnection *gc = purple_account_get_connection(r->account);
                 PurpleNotifyUserInfo *info;
@@ -689,6 +711,12 @@ barev_handle_vcard_iq(xmlnode *packet, PurpleBuddy *pb)
 
                 purple_notify_user_info_add_pair_plaintext(info, "JID", r->who);
                 if (fn && *fn) purple_notify_user_info_add_pair_plaintext(info, "Full Name", fn);
+
+                {
+                    BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
+                    if (bb && bb->msg && *bb->msg)
+                        purple_notify_user_info_add_pair_plaintext(info, "Status", bb->msg);
+                }
 
                 /* show avatar hash we currently track (if any) */
                 {
@@ -1487,7 +1515,7 @@ _bonjour_handle_presence(PurpleBuddy *pb, xmlnode *presence_node)
     /* --- Barev: XEP-0153 avatar update in presence --- */
     if (bb) {
         xmlnode *x = xmlnode_get_child_with_namespace(presence_node, "x", BAREV_VCARD_UPDATE_NS);
-        if (x) {
+        if (x && xmlnode_get_child(x, "photo")) {
             xmlnode *p = xmlnode_get_child(x, "photo");
             gchar *new_hash = p ? xmlnode_get_data(p) : NULL;
 
@@ -1505,21 +1533,19 @@ _bonjour_handle_presence(PurpleBuddy *pb, xmlnode *presence_node)
                 if (new_hash) g_free(new_hash);
                 barev_clear_buddy_icon(pb, bb);
             } else {
-                gboolean changed = (!bb->phsh || !purple_strequal(bb->phsh, new_hash));
-
-                if (changed) {
-                    g_free(bb->phsh);
-                    bb->phsh = g_strdup(new_hash);
-                }
-
-                /* IMPORTANT: fetch vCard if changed OR no icon yet */
-                if (changed || !have_icon) {
-                    purple_debug_info("barev",
-                        "Barev: requesting vCard for %s (changed=%d have_icon=%d)\n",
-                        name, changed ? 1 : 0, have_icon ? 1 : 0);
-
-                    bonjour_jabber_request_vcard(pb, FALSE);
-                }
+                if (barev_avatar_hash_valid(new_hash)) {
+                    gboolean cached;
+                    g_free(bb->phsh); bb->phsh = g_ascii_strdown(new_hash, -1);
+                    cached = barev_avatar_cache_matches(pb, new_hash);
+                    /* Loading an icon can invoke UI callbacks that disconnect. */
+                    bb = purple_buddy_get_protocol_data(pb);
+                    if (bb && bb->phsh && !g_ascii_strcasecmp(bb->phsh, new_hash)) {
+                        if (cached) {
+                            barev_avatar_request_clear(&bb->avatar_request);
+                            purple_debug_info("barev", "Avatar cache: advertised SHA-1 matches cached bytes.\n");
+                        } else bonjour_jabber_request_vcard(pb, FALSE);
+                    }
+                } else purple_debug_warning("barev", "Avatar announcement ignored: invalid SHA-1.\n");
 
                 g_free(new_hash);
             }
@@ -3248,7 +3274,7 @@ _find_or_start_conversation(BonjourJabber *jdata, const gchar *to)
                 }
 
                 if (connect(sock, (struct sockaddr*)&addr6, sizeof(addr6)) == 0 ||
-                    !barev_connect_pending()) {
+                    barev_connect_pending()) {
                     /* Connection successful or in progress */
                     BonjourJabberConversation *bconv;
 
@@ -3542,8 +3568,10 @@ bonjour_jabber_close_conversation(BonjourJabberConversation *bconv)
 
     /* Clear this in the one function which owns destruction.  Requiring every
      * caller to clear it after g_free() left several stale-pointer paths. */
-    if (was_current)
+    if (was_current) {
+      barev_avatar_request_clear(&bb->avatar_request);
       bb->conversation = NULL;
+    }
 
     if (was_current && bconv->account && bconv->account->gc &&
         PURPLE_CONNECTION_IS_VALID(bconv->account->gc))

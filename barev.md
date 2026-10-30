@@ -141,7 +141,60 @@ The **RECEIVER** responds with their stream header:
 
 **Note**: After 3 consecutive ping failures, buddy is marked offline.
 
-### 4. Stream Termination
+### 4. Avatars (XEP-0153)
+
+Peers advertise avatars in presence using `vcard-temp:x:update`. The `photo`
+value is the 40-digit hexadecimal SHA-1 of the original image bytes, before
+Base64 encoding:
+
+```xml
+<presence>
+  <x xmlns="vcard-temp:x:update">
+    <photo>0123456789abcdef0123456789abcdef01234567</photo>
+  </x>
+</presence>
+```
+
+The hash above illustrates the wire format. Each sender computes it from its
+actual image. Receivers compare the advertised hash with the SHA-1 of locally
+cached image bytes. A matching, available image is reused across stream
+reconnections and account logins without an automatic download. Cached checksum
+metadata alone is insufficient when the image file is missing or its bytes have
+changed.
+
+If the image is missing or its hash differs, request the peer's vCard:
+
+```xml
+<iq type="get" id="avatar-1">
+  <vCard xmlns="vcard-temp"/>
+</iq>
+```
+
+The peer replies with the same IQ ID and a `vCard` containing `PHOTO/TYPE` and
+Base64-encoded `PHOTO/BINVAL`. Decode the image and recompute SHA-1 before
+installing it. The bytes must match the advertised hash associated with that
+request. An obsolete response must not replace a more recently advertised
+avatar. Keep at most one automatic request outstanding per peer; retire it on
+response, error, or a bounded timeout so repeated presence does not create
+duplicate downloads. Clients also apply their supported image-format and size
+limits.
+
+An explicit `<photo/>` removes the avatar and its cached entry. Presence without
+a `photo` element leaves the known avatar unchanged. An explicit user request
+for full contact information may still retrieve a vCard independently of the
+automatic avatar cache.
+
+#### libpurple storage
+
+Use `purple_buddy_icons_set_for_user()` to store received image bytes and their
+verified SHA-1. Use `purple_buddy_icons_find()` and
+`purple_buddy_icon_get_data()` to load an existing peer image for validation.
+Libpurple manages cache filenames, references, and buddy-list metadata. Its
+default cache on Linux is `~/.purple/icons/`; the configured profile or cache
+directory can change that location. Implementations use these APIs instead of
+constructing cache paths from peer-supplied data.
+
+### 5. Stream Termination
 
 #### Graceful close:
 ```xml

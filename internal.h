@@ -133,7 +133,7 @@ static inline int barev_connect_pending()
     int w = WSAGetLastError();
     return w == WSAEWOULDBLOCK || w == WSAEINPROGRESS || w == WSAEALREADY;
 #else
-    return errno = EINPROGRESS;
+    return errno == EINPROGRESS || errno == EALREADY || errno == EWOULDBLOCK;
 #endif
 }
 
