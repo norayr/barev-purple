@@ -172,6 +172,7 @@ static void bonjour_xfer_end(PurpleXfer *xfer)
   }
 
   bonjour_free_xfer(xfer);
+  barev_images_file_completed(xfer);
 }
 
 static PurpleXfer*
@@ -1240,4 +1241,3 @@ bonjour_bytestreams_connect(PurpleXfer *xfer)
     purple_xfer_cancel_local(xfer);
   }
 }
-

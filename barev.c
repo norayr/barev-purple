@@ -39,6 +39,7 @@
 
 #include "barev.h"
 #include "address.h"
+#include "image-ui.h"
 #include "jabber.h"
 #include "jingle/jingle.h"
 #ifdef USE_VV
@@ -1057,6 +1058,7 @@ bonjour_login_barev(PurpleAccount *account)
    * connected_cb calls set_list_received() with the full roster already
    * populated.  Moving this earlier caused set_list_received to see an
    * empty blist, making the initial Telepathy contact list empty. */
+  bd->images = barev_images_new(account);
   purple_connection_set_state(gc, PURPLE_CONNECTED);
 
 #ifdef USE_VV
@@ -1093,6 +1095,10 @@ bonjour_close(PurpleConnection *connection)
 {
   BonjourData *bd = connection->proto_data;
   PurpleAccount *account = purple_connection_get_account(connection);
+
+  if (bd && bd->images) {
+    BarevImages *images = bd->images; bd->images = NULL; barev_images_close(images);
+  }
 
   /* Barev buddies are manually added contacts — persist their IPs and mark
    * them offline instead of removing them from the buddy list. */
@@ -1175,7 +1181,18 @@ bonjour_send_im(PurpleConnection *connection, const char *to, const char *msg, P
   if (bd == NULL || bd->jabber_data == NULL)
     return 0;
 
-  return bonjour_jabber_send_message(bd->jabber_data, to, msg);
+  {
+    char *stripped = NULL;
+    int handled = barev_images_send(bd->images, to, msg, &stripped), result;
+    if (handled < 0) return handled;
+    if (!PURPLE_CONNECTION_IS_VALID(connection) || purple_connection_get_protocol_data(connection) != bd) {
+      g_free(stripped); return handled ? 1 : -1;
+    }
+    if (!handled) return bonjour_jabber_send_message(bd->jabber_data, to, msg);
+    result = 1;
+    if (stripped && *stripped) result = bonjour_jabber_send_message(bd->jabber_data, to, stripped);
+    g_free(stripped); return result;
+  }
 }
 
 static void
@@ -1261,6 +1278,8 @@ bonjour_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group)
 
 static void bonjour_remove_buddy(PurpleConnection *pc, PurpleBuddy *buddy, PurpleGroup *group) {
   BonjourBuddy *bb = purple_buddy_get_protocol_data(buddy);
+
+  barev_images_forget(buddy);
 
   if (bb) {
     purple_debug_info("barev", "Removing buddy: %s\n", purple_buddy_get_name(buddy));
@@ -1559,7 +1578,7 @@ barev_get_media_caps(PurpleAccount *account, const char *who)
 
 static PurplePluginProtocolInfo prpl_info =
 {
-  OPT_PROTO_NO_PASSWORD,
+  OPT_PROTO_NO_PASSWORD | OPT_PROTO_IM_IMAGE,
   NULL,                                                    /* user_splits */
   NULL,                                                    /* protocol_options */
   {"png,gif,jpeg", 0, 0, 96, 96, 65535, PURPLE_ICON_SCALE_DISPLAY}, /* icon_spec */
@@ -1857,6 +1876,7 @@ init_plugin(PurplePlugin *plugin)
   prpl_info.protocol_options = g_list_append(prpl_info.protocol_options, option);
 
   my_protocol = plugin;
+  prpl_info.protocol_options = BarevImageUI_Options(prpl_info.protocol_options);
 }
 
 static void

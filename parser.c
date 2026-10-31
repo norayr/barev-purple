@@ -258,6 +258,18 @@ bonjour_parser_element_start_libxml(void *user_data,
     }
   } else {
 
+    if (!bconv->current) bconv->stanza_bytes = bconv->stanza_depth = bconv->stanza_nodes = 0;
+    bconv->stanza_bytes += xmlStrlen(element_name) + (namespace ? xmlStrlen(namespace) : 0) + 8;
+    ++bconv->stanza_depth; ++bconv->stanza_nodes;
+    for (i = 0; i < nb_attributes * 5; i += 5)
+      bconv->stanza_bytes += (size_t)(attributes[i+4] - attributes[i+3]) + xmlStrlen(attributes[i]) + 8;
+    for (i = 0; i < nb_namespaces * 2; i += 2)
+      bconv->stanza_bytes += (namespaces[i+1] ? xmlStrlen(namespaces[i+1]) : 0) + 16;
+    if (bconv->stanza_bytes > 524288 || bconv->stanza_depth > 24 || bconv->stanza_nodes > 512 || nb_attributes > 128) {
+      async_bonjour_jabber_close_conversation(bconv);
+      return;
+    }
+
     /* If we haven't yet attached a buddy and this isn't "<stream:features />",
      * try to get a "from" attribute as a last resort to match our buddy. */
     if(bconv->pb == NULL
@@ -329,11 +341,13 @@ bonjour_parser_element_end_libxml(void *user_data, const xmlChar *element_name,
   }
 
   if(bconv->current->parent) {
+    if (bconv->stanza_depth) --bconv->stanza_depth;
     if(!xmlStrcmp((xmlChar*) bconv->current->name, element_name))
       bconv->current = bconv->current->parent;
   } else {
     xmlnode *packet = bconv->current;
     bconv->current = NULL;
+    bconv->stanza_bytes = bconv->stanza_depth = bconv->stanza_nodes = 0;
     bonjour_jabber_process_packet(bconv->pb, packet);
     xmlnode_free(packet);
   }
@@ -350,6 +364,12 @@ bonjour_parser_element_text_libxml(void *user_data, const xmlChar *text, int tex
 
   if(!text || !text_len)
     return;
+
+  if (text_len < 0 || (size_t)text_len > 524288 - bconv->stanza_bytes) {
+    async_bonjour_jabber_close_conversation(bconv);
+    return;
+  }
+  bconv->stanza_bytes += text_len;
 
   xmlnode_insert_data(bconv->current, (const char*) text, text_len);
 }
@@ -469,11 +489,14 @@ void bonjour_parser_process(BonjourJabberConversation *bconv, const char *buf, i
   if (!bconv || bconv->closing || bconv->close_timeout != 0)
     return;
 
+  /* Creating a push parser can immediately invoke SAX callbacks too. */
+  bconv->in_parser = TRUE;
   if (bconv->context == NULL) {
     /* libxml inconsistently starts parsing on creating the
      * parser, so do a ParseChunk right afterwards to force it. */
     bconv->context = xmlCreatePushParserCtxt(&bonjour_parser_libxml, bconv, buf, len, NULL);
     if (bconv->context == NULL) {
+      bconv->in_parser = FALSE;
       purple_debug_error("barev", "Failed to create XML parser context.\n");
       return;
     }

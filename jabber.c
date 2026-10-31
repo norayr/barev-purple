@@ -79,6 +79,7 @@
 #include "buddyicon.h"
 #include "notify.h"
 #include "imgstore.h"
+#include "image-ui.h"
 
 #ifdef _SIZEOF_ADDR_IFREQ
 #  define HX_SIZE_OF_IFREQ(a) _SIZEOF_ADDR_IFREQ(a)
@@ -1382,6 +1383,9 @@ bonjour_jabber_process_packet(PurpleBuddy *pb, xmlnode *packet)
     if (bb && bb->conversation)
         bb->conversation->last_activity = time(NULL);
 
+    if (barev_images_receive(pb, packet))
+        return;
+
     if (purple_strequal(packet->name, "message")) {
         _jabber_parse_and_write_message_to_ui(packet, pb);
         return;
@@ -1749,6 +1753,10 @@ _jabber_parse_and_write_message_to_ui(xmlnode *message_node, PurpleBuddy *pb)
   }
 
   /* Send the message to the UI */
+  {
+    char *safe = BarevImageUI_Strip(body);
+    g_free(body); body = safe;
+  }
   serv_got_im(gc, purple_buddy_get_name(pb), body, 0, time(NULL));
 
   g_free(body);
@@ -3572,6 +3580,7 @@ bonjour_jabber_close_conversation(BonjourJabberConversation *bconv)
     if (was_current) {
       barev_avatar_request_clear(&bb->avatar_request);
       bb->conversation = NULL;
+      barev_images_lost(pb);
     }
 
     if (was_current && bconv->account && bconv->account->gc &&

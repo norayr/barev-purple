@@ -54,6 +54,8 @@ GLIB_LIBS      := -L$(W32_GTK_DIR)/lib -L$(W32_LIBDIR) -lglib-2.0 -lgobject-2.0 
 
 LIBXML_CFLAGS  := -I$(W32_XML_INC)
 LIBXML_LIBS    := -L$(W32_LIBDIR) -lxml2
+IMAGE_CFLAGS   := -I$(W32_GTK_DIR)/include/gdk-pixbuf-2.0
+IMAGE_LIBS     := -L$(W32_GTK_DIR)/lib -lgdk_pixbuf-2.0
 else
 PURPLE_CFLAGS  := $(shell pkg-config --cflags purple) $(PURPLE_ADDITIONAL)
 PURPLE_LIBS    := $(shell pkg-config --libs purple)
@@ -63,6 +65,8 @@ GLIB_LIBS      := $(shell pkg-config --libs glib-2.0 $(GLIB_ADDITIONAL))
 
 LIBXML_CFLAGS  := $(shell pkg-config --cflags libxml-2.0)
 LIBXML_LIBS    := $(shell pkg-config --libs libxml-2.0)
+IMAGE_CFLAGS   := $(shell pkg-config --cflags gdk-pixbuf-2.0)
+IMAGE_LIBS     := $(shell pkg-config --libs gdk-pixbuf-2.0)
 endif
 
 # Optional GStreamer / voice-video support.
@@ -108,7 +112,8 @@ CFLAGS += $(WARN) $(PICFLAG) \
           $(PURPLE_CFLAGS) $(GLIB_CFLAGS) $(LIBXML_CFLAGS) $(AVAHI_CFLAGS) \
           -DBAREV_BUILD_ID=\"$(BAREV_BUILD_ID)\"
 
-LDLIBS  = $(PURPLE_LIBS) $(GLIB_LIBS) $(LIBXML_LIBS) $(AVAHI_LIBS) $(LDLIBS_EXTRA) $(WIN_LIBS)
+CFLAGS += $(IMAGE_CFLAGS)
+LDLIBS  = $(PURPLE_LIBS) $(GLIB_LIBS) $(LIBXML_LIBS) $(AVAHI_LIBS) $(LDLIBS_EXTRA) $(WIN_LIBS) $(IMAGE_LIBS)
 
 PLUGIN  = libbarev.$(EXT)
 
@@ -128,6 +133,9 @@ SRCS = \
   buddy.c \
   avatar-cache.c \
   address.c \
+  image-wire.c \
+  image-ui.c \
+  images.c \
   jabber.c \
   parser.c \
   bonjour_ft.c \
@@ -196,6 +204,19 @@ tests/address-test: tests/address-test.c $(wildcard $(SOURCE_DIR)/*.h)
 .PHONY: test-addresses
 test-addresses: $(PLUGIN) tests/address-test
 	python3 "$(SOURCE_DIR)/tests/check-addresses.py" "$(CURDIR)/tests/address-test" "$(abspath $(PLUGIN))"
+
+tests/image-ui-test: tests/image-ui-test.c image-ui.c image-ui.h
+	mkdir -p tests
+	$(CC) $(CFLAGS) -I"$(SOURCE_DIR)" "$(SOURCE_DIR)/tests/image-ui-test.c" "$(SOURCE_DIR)/image-ui.c" -o "$@" $(LDLIBS) $(shell pkg-config --libs gmodule-2.0)
+
+.PHONY: test-images
+tests/image-wire-test: tests/image-wire-test.c image-wire.c image-wire.h
+	mkdir -p tests
+	$(CC) $(CFLAGS) -I"$(SOURCE_DIR)" "$(SOURCE_DIR)/tests/image-wire-test.c" "$(SOURCE_DIR)/image-wire.c" -o "$@" $(LDLIBS)
+
+test-images: $(PLUGIN) tests/image-ui-test tests/image-wire-test
+	python3 "$(SOURCE_DIR)/tests/check-images.py" "$(CURDIR)/tests/image-ui-test" "$(abspath $(PLUGIN))"
+	"$(CURDIR)/tests/image-wire-test"
 FORCE:
 
 install: $(PLUGIN)

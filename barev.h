@@ -30,6 +30,7 @@
 #include "jabber.h"
 #include "buddy.h"
 #include <notify.h>
+#include "images.h"
 
 #define BONJOUR_GROUP_NAME _("Barev")
 #define BONJOUR_PROTOCOL_NAME "barev"
@@ -51,6 +52,7 @@ typedef struct _BonjourData
   GSList *xfer_lists;
   gchar *jid;
   guint reconnect_timer; // barev reconnect timer
+  BarevImages *images;
 } BonjourData;
 
 /**

@@ -74,6 +74,8 @@ typedef struct _BonjourJabberConversation
    * Destroying the parser from inside a callback is a use-after-free, so
    * close requests are deferred to the event loop while this is set. */
   gboolean in_parser;
+  size_t stanza_bytes;
+  unsigned stanza_depth, stanza_nodes;
   PurpleProxyConnectData *connect_data;
   gpointer stream_data;
   xmlParserCtxt *context;
