@@ -13,11 +13,31 @@
 
 static unsigned checks, starts, popups;
 static char *shown_ipv6, *shown_address;
+static unsigned errors;
+static char *last_error;
 #define CHECK(value) do { ++checks; if (!(value)) g_error("address check %u failed", checks); } while (0)
 
 /* Stop login before any listener or peer connection is opened. */
 G_MODULE_EXPORT gint bonjour_jabber_start(BonjourJabber *data)
 { (void)data; ++starts; return -1; }
+
+static void *show_message(PurpleNotifyMsgType type, const char *title, const char *primary, const char *secondary)
+{
+    (void)title;
+    if (type == PURPLE_NOTIFY_MSG_ERROR) {
+        ++errors; g_free(last_error); last_error = g_strdup_printf("%s\n%s", primary, secondary);
+    }
+    return NULL;
+}
+
+static unsigned buddy_count(PurpleAccount *account)
+{
+    PurpleBlistNode *node;
+    unsigned count = 0;
+    for (node = purple_blist_get_root(); node; node = purple_blist_node_next(node, TRUE))
+        if (PURPLE_BLIST_NODE_IS_BUDDY(node) && purple_buddy_get_account((PurpleBuddy *)node) == account) ++count;
+    return count;
+}
 
 static void *show_info(PurpleConnection *gc, const char *who, PurpleNotifyUserInfo *info)
 {
@@ -39,7 +59,7 @@ int main(int argc, char **argv)
 {
     PurpleEventLoopUiOps events = {.timeout_add = g_timeout_add, .timeout_remove = g_source_remove,
                                    .timeout_add_seconds = g_timeout_add_seconds};
-    PurpleNotifyUiOps notify = {.notify_userinfo = show_info};
+    PurpleNotifyUiOps notify = {.notify_message = show_message, .notify_userinfo = show_info};
     PurpleAccount *account;
     PurpleConnection *gc;
     PurplePlugin *plugin;
@@ -147,10 +167,45 @@ int main(int argc, char **argv)
     protocol->add_buddy(gc, buddy, purple_buddy_get_group(buddy));
     CHECK(!strcmp(purple_buddy_get_local_buddy_alias(buddy), "My chosen alias"));
     g_module_close(module);
+
+    /* Rejected Add Buddy callbacks must roll back the local insertion. */
+    {
+        const char *numeric = "lmd@201:5b1e:5e06:7daa:d39:e62c:356e:e5a6";
+        const char *bad_names[] = {
+            "lmd@lmd@201:5b1e:5e06:7daa:d39:e62c:356e:e5a6",
+            "lmd@lmd@201:5b1e:5e06:7daa:d39:e62c:356e:e5a6lmd@201:5b1e:5e06:7daa:d39:e62c:356e:e5a6",
+            "bad@ai-f.barev.v6.alt", "bad@ai--e.barev.v6.alt", "@200::2", "bad@"
+        };
+        unsigned before = buddy_count(account), i, repeat;
+        for (i = 0; i < G_N_ELEMENTS(bad_names); ++i) {
+            for (repeat = 0; repeat < 2; ++repeat) {
+                PurpleBuddy *bad = purple_buddy_new(account, bad_names[i], "Rejected alias");
+                unsigned notices = errors;
+                purple_blist_add_buddy(bad, NULL, NULL, NULL);
+                purple_account_add_buddy_with_invite(account, bad, NULL);
+                CHECK(errors == notices+1 && last_error && strstr(last_error, "Contact not added"));
+                CHECK(buddy_count(account) == before);
+                CHECK(purple_find_buddy(account, bad_names[i]) == NULL);
+            }
+        }
+        {
+            PurpleBuddy *accepted = purple_buddy_new(account, numeric, "Valid full IPv6");
+            unsigned notices = errors;
+            purple_blist_add_buddy(accepted, NULL, NULL, NULL);
+            for (repeat = 0; repeat < 3; ++repeat) {
+                purple_account_add_buddy_with_invite(account, accepted, NULL);
+                CHECK(errors == notices && buddy_count(account) == before+1);
+                CHECK(purple_find_buddy(account, numeric) == accepted);
+                CHECK(!strcmp(purple_buddy_get_local_buddy_alias(accepted), "Valid full IPv6"));
+            }
+            bb = purple_buddy_get_protocol_data(accepted);
+            CHECK(bb && bb->ips && !strcmp(bb->ips->data, "201:5b1e:5e06:7daa:d39:e62c:356e:e5a6"));
+        }
+    }
     g_free(data->jid); data->jid = NULL;
     purple_account_disconnect(account);
     CHECK(purple_account_is_disconnected(account));
-    g_free(shown_ipv6); g_free(shown_address);
+    g_free(shown_ipv6); g_free(shown_address); g_free(last_error);
     purple_core_quit();
     g_print("Barev C address UI and persistence checks passed: %u\n", checks);
     return 0;

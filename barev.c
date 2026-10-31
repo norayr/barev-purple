@@ -727,7 +727,9 @@ barev_prepare_buddy(PurpleBuddy *buddy)
     const char *at = name ? strchr(name, '@') : NULL;
     char *lower, *numeric;
     gboolean candidate;
+    if (!name || !*name) return FALSE;
     if (!at) return TRUE; /* Haze also restores bare nicknames. */
+    if (at == name || !at[1] || strchr(at+1, '@')) return FALSE;
     lower = g_ascii_strdown(at+1, -1);
     candidate = strstr(lower, ".v6.alt") != NULL;
     g_free(lower);
@@ -821,8 +823,11 @@ barev_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group)
     const char *full_buddy_name;
 
     if (!barev_prepare_buddy(buddy)) {
-        purple_notify_error(gc, _("Barev contact"), _("Invalid encoded Barev address"),
-            _("Use nick@<encoded>.barev.v6.alt or the existing nick@IPv6 format."));
+        /* Pidgin inserts the local buddy before the protocol callback. */
+        purple_blist_remove_buddy(buddy);
+        if (PURPLE_CONNECTION_IS_VALID(gc))
+            purple_notify_error(gc, _("Barev contact"), _("Contact not added"),
+                _("Use nick@<encoded>.barev.v6.alt or nick@IPv6, with exactly one '@' separator. Check for repeated pasted text."));
         return;
     }
     full_buddy_name = purple_buddy_get_name(buddy);
