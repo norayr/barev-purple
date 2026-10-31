@@ -128,6 +128,11 @@ static void send_choice(gpointer data, int choice)
     g_free(bytes); sending_free(s);
 }
 
+/* Pidgin reverses action-button indices. Bind meaning to the callback instead. */
+static void send_fit(gpointer data, int action) { (void)action; send_choice(data, 0); }
+static void send_original(gpointer data, int action) { (void)action; send_choice(data, 1); }
+static void send_cancel(gpointer data, int action) { (void)action; send_choice(data, 2); }
+
 BarevImageUI *BarevImageUI_New(PurpleAccount *account, const BarevImageBackend *backend)
 {
     BarevImageUI *ui = g_new0(BarevImageUI, 1); ui->account = account; ui->backend = *backend; ui->refs = 1; return ui;
@@ -178,7 +183,7 @@ int BarevImageUI_Send(BarevImageUI *ui, const char *who, const char *markup, cha
     if (!count) { unref(ui); return 0; }
     if (result < 0) {
         for (it = requests; it; it = it->next) sending_free(it->data);
-        g_list_free(requests); notice(ui, who, "Send Image accepts up to four static PNG/JPEG images, each at most 16 MiB and 16 megapixels. Use Send File for other files.");
+        g_list_free(requests); notice(ui, who, "Image not sent. Choose up to four valid static PNG or JPEG images, each at most 16 MiB, 8192 pixels per side and 16 megapixels. Use Send File for other file types.");
         unref(ui); return result;
     }
     *stripped = BarevImageUI_Strip(markup);
@@ -198,8 +203,8 @@ int BarevImageUI_Send(BarevImageUI *ui, const char *who, const char *markup, cha
             void *request;
             ++s->refs;
             request = purple_request_action(ui, "Send image", "Resize this image or send the original?", description,
-                    0, ui->account, who, NULL, s, 3, "Fit for chat", G_CALLBACK(send_choice),
-                    "Send original", G_CALLBACK(send_choice), "Cancel", G_CALLBACK(send_choice));
+                    0, ui->account, who, NULL, s, 3, "Fit for chat", G_CALLBACK(send_fit),
+                    "Send original", G_CALLBACK(send_original), "Cancel", G_CALLBACK(send_cancel));
             if (g_list_find(ui->sending, s)) {
                 s->request = request;
                 if (!request) sending_free(s);

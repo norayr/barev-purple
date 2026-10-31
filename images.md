@@ -1,5 +1,11 @@
 # Conversation pictures
 
+Resize-dialog actions are bound to their labelled callbacks, so Fit for chat,
+Send original and Cancel remain correct when Pidgin reverses button indices.
+Pidgin owns the Insert Image picker. Barev validates selected bytes and reports
+unsupported, damaged or over-limit selections with a specific image notice;
+use Send File for other file types.
+
 Barev's Pidgin **Insert / Image** action sends static PNG/JPEG pictures over an
 established contact's messaging connection. For large pictures, choose
 **Fit for chat**, **Send original**, or **Cancel**. Fitting creates a copy at
@@ -48,6 +54,10 @@ individually. Request/offer budgets, bounded stanza queues, sequence checks, and
 
 `make test-images` runs the C image engine and native UI tests without opening
 peer connections.
+The UI checks exercise Pidgin's reversed button indices and invalid-image
+selection through the protocol and conversation APIs. The 34 UI and 73 wire
+checks pass with voice/video enabled and disabled; the updated UI and other
+local regressions also pass GCC ASan/UBSan.
 
 Building additionally requires `gdk-pixbuf-2.0` development files and PNG/JPEG
 loaders (`libgdk-pixbuf-2.0-dev` on Debian, `x11-libs/gdk-pixbuf` on Gentoo).

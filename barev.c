@@ -1184,6 +1184,8 @@ bonjour_send_im(PurpleConnection *connection, const char *to, const char *msg, P
   {
     char *stripped = NULL;
     int handled = barev_images_send(bd->images, to, msg, &stripped), result;
+    /* Image selection errors already have a specific, non-logged notice. */
+    if (handled == -EINVAL) return 0;
     if (handled < 0) return handled;
     if (!PURPLE_CONNECTION_IS_VALID(connection) || purple_connection_get_protocol_data(connection) != bd) {
       g_free(stripped); return handled ? 1 : -1;
