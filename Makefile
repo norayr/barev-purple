@@ -22,8 +22,9 @@ else
   PURPLE_ADDITIONAL ?=
 endif
 
-BAREV_BUILD_ID ?= $(shell git describe --tags --always --dirty 2>/dev/null || \
-	dpkg-parsechangelog -SVersion 2>/dev/null || printf unknown)
+BAREV_BUILD_ID ?= $(shell git -C "$(SOURCE_DIR)" describe --tags --always --dirty 2>/dev/null || \
+	dpkg-parsechangelog -l"$(SOURCE_DIR)/debian/changelog" -SVersion 2>/dev/null || \
+	cat "$(SOURCE_DIR)/VERSION" 2>/dev/null || printf unknown)
 
 # Where to install the plugin:
 PLUGIN_DIR := $(shell pkg-config --variable=plugindir purple)

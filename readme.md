@@ -3,6 +3,8 @@
 **Barev** was started initially as a fork of Pidgin’s Bonjour protocol plugin, adapted for **manual peer addressing** (no mDNS / no Avahi required).
 It’s meant for direct peer-to-peer chats (and related features) over IPv6—commonly used with **Yggdrasil**.
 
+Current release: **3.1.0**. See [the changelog](CHANGELOG.md) for changes since 3.0.0.
+
 Before making **Barev**, the [attempt](https://github.com/norayr/ybb) of using **Bonjour** over Yggdrasil was made. It works, but is limited. Thus this project.
 
 # Compile
