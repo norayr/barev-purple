@@ -81,8 +81,10 @@ parse_from_attrib_and_find_buddy(BonjourJabberConversation *bconv, int nb_attrib
 
   /* If the "from" attribute is specified, attach it to the conversation. */
   for(i=0; i < nb_attributes * 5; i+=5) {
-    if(!xmlStrcmp(attributes[i], (xmlChar*) "from")) {
+    if(!xmlStrcmp(attributes[i], (xmlChar*) "from") && attributes[i+2] == NULL) {
       int len = attributes[i+4] - attributes[i+3];
+      if (len <= 0)
+        return FALSE;
       char *from_jid = g_strndup((char *)attributes[i+3], len);
 
       purple_debug_info("barev",
@@ -211,11 +213,12 @@ parse_from_attrib_and_find_buddy(BonjourJabberConversation *bconv, int nb_attrib
       /* Set the buddy_name from the "from" attribute and try to match */
       g_free(bconv->buddy_name);
       bconv->buddy_name = from_jid;
+      /* Matching can replace and free buddy_name, including from_jid. */
       bonjour_jabber_conv_match_by_name(bconv);
 
       purple_debug_info("barev",
           "parse_from: after conv_match_by_name for '%s': pb=%s\n",
-          from_jid,
+          bconv->buddy_name ? bconv->buddy_name : "(null)",
           bconv->pb ? purple_buddy_get_name(bconv->pb) : "(null)");
 
       return (bconv->pb != NULL);
@@ -246,7 +249,11 @@ bonjour_parser_element_start_libxml(void *user_data,
       bconv->recv_stream_start = TRUE;
 
       /* Always parse and validate the "from" attribute, even if we already have a buddy */
-      parse_from_attrib_and_find_buddy(bconv, nb_attributes, attributes);
+      if (!parse_from_attrib_and_find_buddy(bconv, nb_attributes, attributes)) {
+        purple_debug_warning("barev", "Rejecting stream without a recognized from identity\n");
+        async_bonjour_jabber_close_conversation(bconv);
+        return;
+      }
 
       if (!bconv->closing && bconv->close_timeout == 0) {
         purple_debug_info("barev",

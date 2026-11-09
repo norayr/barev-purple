@@ -205,6 +205,14 @@ tests/address-test: tests/address-test.c $(wildcard $(SOURCE_DIR)/*.h)
 test-addresses: $(PLUGIN) tests/address-test
 	python3 "$(SOURCE_DIR)/tests/check-addresses.py" "$(CURDIR)/tests/address-test" "$(abspath $(PLUGIN))"
 
+tests/parser-test: tests/parser-test.c parser.c $(wildcard $(SOURCE_DIR)/*.h)
+	mkdir -p tests
+	$(CC) $(CFLAGS) -I"$(SOURCE_DIR)" "$(SOURCE_DIR)/tests/parser-test.c" "$(SOURCE_DIR)/parser.c" -o "$@" $(LDLIBS)
+
+.PHONY: test-parser
+test-parser: $(PLUGIN) tests/parser-test
+	python3 "$(SOURCE_DIR)/tests/check-parser.py" "$(CURDIR)/tests/parser-test" "$(abspath $(PLUGIN))"
+
 tests/image-ui-test: tests/image-ui-test.c image-ui.c image-ui.h
 	mkdir -p tests
 	$(CC) $(CFLAGS) -I"$(SOURCE_DIR)" "$(SOURCE_DIR)/tests/image-ui-test.c" "$(SOURCE_DIR)/image-ui.c" -o "$@" $(LDLIBS) $(shell pkg-config --libs gmodule-2.0)
