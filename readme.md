@@ -115,7 +115,8 @@ Currently, if you want to change your contact's port, you need to
 ** SI File Transfer (XEP-0096) - Used for the actual file transfer over the stream.
 
 * statuses: available, away, do not disturb, status lines.
-* avatars (XEP-0153)
+* avatars (XEP-0153), with advertised SHA-1 comparison and persistent libpurple
+  cache reuse. See [avatar exchange and caching](barev.md#4-avatars-xep-0153).
 * Chat State Notification (XEP-0085) - a bit of composing events.
 * Jingle RTP audio/video calls when built with `USE_VV=1`.
 
