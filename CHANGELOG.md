@@ -1,5 +1,21 @@
 # Changelog
 
+## 3.1.1 — 2026-11-11
+
+### Fixed
+
+- Enforcing complete peer identities and actual socket addresses during stream
+  establishment, including the expected contact on outgoing connections.
+- Validating stream recipients, versions and namespaces, and checking stanza
+  addresses against the established identities.
+- Preserving established connections, resolving simultaneous connections
+  consistently for case-only nicknames, and rejecting unknown or over-limit
+  incoming peers.
+- Bounding stream headers and incomplete XML frames, enforcing connection
+  deadlines, and closing malformed streams before further stanza delivery.
+- Escaping stream identities and using complete numeric identities on outgoing
+  stanzas, including saved Haze nickname contacts.
+
 ## 3.1.0 — 2026-11-09
 
 ### Added

@@ -36,10 +36,8 @@
 
 #define STREAM_END "</stream:stream>"
 
-/* Maximum seconds to wait for the peer to send <stream:stream> after the TCP
- * connection is established.  If exceeded, the connection is dropped and
- * re-attempted.  Covers both stuck EINPROGRESS and connected-but-silent peers. */
-#define PENDING_STREAM_TIMEOUT 120
+/* Maximum seconds for a pending connection or stream-opening frame. */
+#define PENDING_STREAM_TIMEOUT 30
 
 typedef enum {
   STREAM_NOT_SENT  = 0,
@@ -74,7 +72,10 @@ typedef struct _BonjourJabberConversation
    * Destroying the parser from inside a callback is a use-after-free, so
    * close requests are deferred to the event loop while this is set. */
   gboolean in_parser;
-  size_t stanza_bytes;
+  size_t header_bytes;
+  char header_last;
+  guint64 received_bytes, frame_end;
+  unsigned input_events;
   unsigned stanza_depth, stanza_nodes;
   PurpleProxyConnectData *connect_data;
   gpointer stream_data;
@@ -83,11 +84,11 @@ typedef struct _BonjourJabberConversation
   PurpleBuddy *pb;
   PurpleAccount *account;
 
-  /* The following are only needed before attaching to a PurpleBuddy */
+  /* Complete canonical peer identity; UI nicknames may be stored separately. */
   gchar *buddy_name;
   gchar *ip;
   gchar *local_ip;
-  /* Remote destination port fo outgoing connections; -1 if unknown (incoming). */
+  /* Remote destination port for outgoing connections; -1 for incoming. */
   gint remote_port;
   /* This points to a data entry in BonjourBuddy->ips */
   const gchar *ip_link;
@@ -96,6 +97,8 @@ typedef struct _BonjourJabberConversation
   guint ping_response_timer;  /* Timer for waiting for ping response */
   gchar *last_ping_id;        /* ID of last sent ping */
   time_t last_activity;       /* Last time we received any data */
+  gint64 frame_started;       /* Monotonic start of the current frame deadline */
+  guint frame_timer;
   gint ping_failures;         /* Consecutive ping failures */
   /* Jingle voice/video sessions keyed by sid (GHashTable or NULL) */
   GHashTable *jingle_sessions;
@@ -128,8 +131,6 @@ const char *bonjour_jabber_get_local_jid(BonjourJabberConversation *bconv);
 void bonjour_jabber_process_packet(PurpleBuddy *pb, xmlnode *packet);
 
 void bonjour_jabber_stop(BonjourJabber *data);
-
-void bonjour_jabber_conv_match_by_ip(BonjourJabberConversation *bconv);
 
 void bonjour_jabber_conv_match_by_name(BonjourJabberConversation *bconv);
 

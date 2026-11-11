@@ -47,10 +47,10 @@ White icons are needed because Maemo's Hildon theme is dark. The HAM app manager
 
 Whitelist-only: unknown peers are rejected immediately. Both nick AND IP must match a known contact.
 
-- `conv_match_by_ip`: rejects a connection from a known IP if the stream `from` JID has a different localpart.
-- `validate_ip_consistency`: rejects a connection from the right nick if the peer IP doesn't match the stored IP for that buddy.
-- When the stream `from` JID encodes an IPv6 address, `getpeername()` is called to verify the actual peer IP matches — prevents impersonation since Yggdrasil IPs are cryptographically bound to public keys.
-- Unknown peers receive a `not-authorized` stream error and are disconnected immediately.
+- Stream establishment matches a complete canonical contact identity, with case-sensitive nicknames. Outgoing connections remain bound to their expected contact.
+- `getpeername()` verifies the peer's claimed IPv6 address, and `getsockname()` verifies the account's local address. Yggdrasil IPs are cryptographically bound to public keys.
+- Unknown peer addresses are rejected before stream negotiation. Invalid identities, recipients, versions and stanza addresses close the connection.
+- Haze's saved bare nicknames use their explicitly stored IPv6 addresses for complete wire identities.
 - Contacts must be added explicitly via osso-abook; the chain is osso-abook → EDS → Mission Control → haze → `barev_add_buddy`.
 - Persistent contacts file: `~/.purple/barev-contacts-<nick>.conf`, loaded on login, written on add/remove/close.
 

@@ -206,13 +206,18 @@ tests/address-test: tests/address-test.c $(wildcard $(SOURCE_DIR)/*.h)
 test-addresses: $(PLUGIN) tests/address-test
 	python3 "$(SOURCE_DIR)/tests/check-addresses.py" "$(CURDIR)/tests/address-test" "$(abspath $(PLUGIN))"
 
-tests/parser-test: tests/parser-test.c parser.c $(wildcard $(SOURCE_DIR)/*.h)
+tests/parser-test: tests/parser-test.c parser.c address.c $(wildcard $(SOURCE_DIR)/*.h)
 	mkdir -p tests
-	$(CC) $(CFLAGS) -I"$(SOURCE_DIR)" "$(SOURCE_DIR)/tests/parser-test.c" "$(SOURCE_DIR)/parser.c" -o "$@" $(LDLIBS)
+	$(CC) $(CFLAGS) -I"$(SOURCE_DIR)" "$(SOURCE_DIR)/tests/parser-test.c" "$(SOURCE_DIR)/parser.c" "$(SOURCE_DIR)/address.c" -o "$@" $(LDLIBS) $(shell pkg-config --libs gmodule-2.0)
 
 .PHONY: test-parser
-test-parser: $(PLUGIN) tests/parser-test
+tests/stream-io-test: tests/stream-io-test.c $(wildcard $(SOURCE_DIR)/*.h)
+	mkdir -p tests
+	$(CC) $(CFLAGS) -I"$(SOURCE_DIR)" "$(SOURCE_DIR)/tests/stream-io-test.c" -o "$@" $(LDLIBS) $(shell pkg-config --libs gmodule-2.0)
+
+test-parser: $(PLUGIN) tests/parser-test tests/stream-io-test
 	python3 "$(SOURCE_DIR)/tests/check-parser.py" "$(CURDIR)/tests/parser-test" "$(abspath $(PLUGIN))"
+	python3 "$(SOURCE_DIR)/tests/check-parser.py" "$(CURDIR)/tests/stream-io-test" "$(abspath $(PLUGIN))"
 
 tests/image-ui-test: tests/image-ui-test.c image-ui.c image-ui.h
 	mkdir -p tests

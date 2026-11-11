@@ -69,6 +69,7 @@
 #include "util.h"
 
 #include "jabber.h"
+#include "address.h"
 #include "jingle/jingle.h"
 #include "parser.h"
 #include "barev.h"
@@ -245,7 +246,10 @@ if_nametoindex(const char *name)
 #define BAREV_VCARD_UPDATE_NS  "vcard-temp:x:update"
 
 static guint barev_avatar_id_counter = 0;
+static GSList *barev_conversations;
+static gboolean bonjour_peer_allowed(PurpleAccount *account, const char *ip);
 static gint _send_data(PurpleBuddy *pb, char *message);
+static char *bonjour_jabber_packet_xml(PurpleBuddy *pb, xmlnode *packet);
 static gchar * barev_make_iq_id(const char *prefix);
 static void _jabber_parse_and_write_message_to_ui(xmlnode *message_node, PurpleBuddy *pb);
 static void _bonjour_handle_presence(PurpleBuddy *pb, xmlnode *presence_node);
@@ -424,7 +428,7 @@ bonjour_jabber_request_vcard(PurpleBuddy *pb, gboolean for_userinfo)
     vcard = xmlnode_new_child(iq, "vCard");
     xmlnode_set_namespace(vcard, BAREV_VCARD_NS);
 
-    xml = xmlnode_to_str(iq, NULL);
+    xml = bonjour_jabber_packet_xml(pb, iq);
     xmlnode_free(iq);
 
     if (!for_userinfo)
@@ -665,7 +669,7 @@ barev_handle_vcard_iq(xmlnode *packet, PurpleBuddy *pb)
         if (img)
             purple_imgstore_unref(img);
 
-        xml = xmlnode_to_str(iq, NULL);
+        xml = bonjour_jabber_packet_xml(pb, iq);
         xmlnode_free(iq);
 
         _send_data(pb, xml);
@@ -861,113 +865,70 @@ barev_refresh_account_jid(BonjourJabberConversation *bconv)
     bd->jid = g_strdup(local_jid);
 }
 
-/* Validate that JID IP matches actual connection IP */
-static gboolean
-validate_ip_consistency(BonjourJabberConversation *bconv, const char *from_jid)
+/* Haze may store a nickname separately from its explicitly saved address. */
+static char *
+bonjour_buddy_identity(PurpleBuddy *pb)
 {
-    struct sockaddr_storage peer_addr;
-    socklen_t peer_addr_len = sizeof(peer_addr);
-    char peer_ip[INET6_ADDRSTRLEN];
-    char *at_sign, *jid_ip;
-    gboolean valid = FALSE;
-    PurpleBuddy *pb;
-    BonjourBuddy *bb;
-
-    if (!from_jid || !bconv || bconv->socket < 0)
-        return FALSE;
-
-    /* Get the buddy and its data */
-    pb = bconv->pb;
-    if (!pb) {
-        purple_debug_warning("barev", "validate_ip_consistency: no buddy attached\n");
-        return FALSE;
-    }
-
-    bb = purple_buddy_get_protocol_data(pb);
-    if (!bb) {
-        purple_debug_warning("barev", "validate_ip_consistency: no buddy data\n");
-        return FALSE;
-    }
-
-    /* Get actual peer IP from socket */
-    if (getpeername(bconv->socket, (struct sockaddr *)&peer_addr, &peer_addr_len) != 0) {
-        purple_debug_error("barev", "Failed to get peer address: %s\n", strerror(errno));
-        return FALSE;
-    }
-
-    if (peer_addr.ss_family == AF_INET6) {
-        struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *)&peer_addr;
-        inet_ntop(AF_INET6, &addr6->sin6_addr, peer_ip, INET6_ADDRSTRLEN);
-
-        /* Remove scope ID if present (e.g., %eth0) */
-        char *percent = strchr(peer_ip, '%');
-        if (percent) *percent = '\0';
-
-        /* First, check if the connection IP is in the buddy's known IP list */
-        GSList *ip_iter = bb->ips;
-        while (ip_iter) {
-            const char *known_ip = ip_iter->data;
-            if (known_ip && g_ascii_strcasecmp(known_ip, peer_ip) == 0) {
-                /* If this conversation knows the remote destination port (outgoing), enforce it too. */
-                if (bconv->remote_port > 0 && bb->port_p2pj > 0 && bb->port_p2pj != bconv->remote_port) {
-                    purple_debug_warning("barev",
-                        "Port mismatch for %s: roster port %d, connected port %d (rejecting)\n",
-                        purple_buddy_get_name(pb), bb->port_p2pj, bconv->remote_port);
-                    return FALSE;
-                }
-
-                purple_debug_info("barev",
-                    "IP validation OK: connection from %s is in buddy's IP list\n",
-                    peer_ip);
-                return TRUE;
-            }
-            ip_iter = ip_iter->next;
+    const char *name = purple_buddy_get_name(pb);
+    char *identity = barev_address_identity(name, FALSE);
+    if (!identity && name && !strchr(name, '@')) {
+        const char *ip = purple_blist_node_get_string(PURPLE_BLIST_NODE(pb), "barev_ip");
+        if (ip) {
+            char *full = g_strdup_printf("%s@%s", name, ip);
+            identity = barev_address_identity(full, FALSE);
+            g_free(full);
         }
-
-        /* If not in the list, check if it matches the JID's IP as a fallback */
-        at_sign = strchr(from_jid, '@');
-        if (!at_sign) {
-            purple_debug_error("barev", "Invalid JID format (no @): %s\n", from_jid);
-            return FALSE;
-        }
-
-        jid_ip = g_strdup(at_sign + 1);
-
-        /* Compare IPs (case-insensitive for hex) */
-        if (g_ascii_strcasecmp(jid_ip, peer_ip) == 0) {
-
-            /* Enforce roster port if this is an outgoing conversation. */
-            if (bconv->remote_port > 0 && bb->port_p2pj > 0 && bb->port_p2pj != bconv->remote_port) {
-                purple_debug_warning("barev",
-                    "Port mismatch for %s: roster port %d, connected port %d (rejecting)\n",
-                    purple_buddy_get_name(pb), bb->port_p2pj, bconv->remote_port);
-                g_free(jid_ip);
-                return FALSE;
-            }
-
-
-            valid = TRUE;
-            purple_debug_info("barev", "IP validation OK: JID=%s matches peer\n", jid_ip);
-        } else {
-            purple_debug_error("barev",
-                "IP MISMATCH! JID says '%s' but connected from '%s', and '%s' is not in buddy's IP list. REJECTING!\n",
-                jid_ip, peer_ip, peer_ip);
-
-            /* Send error response before closing */
-            const char *error_msg =
-                "<stream:error>"
-                "<host-unknown xmlns='urn:ietf:params:xml:ns:xmpp-streams'/>"
-                "<text xmlns='urn:ietf:params:xml:ns:xmpp-streams'>"
-                "IP address mismatch: Your JID must match your connection IP or be in known IPs"
-                "</text>"
-                "</stream:error>"
-                "</stream:stream>";
-            send(bconv->socket, error_msg, strlen(error_msg), MSG_NOSIGNAL);
-        }
-
-        g_free(jid_ip);
     }
+    return identity;
+}
 
+/* Keep UI nicknames and aliases separate from complete wire identities. */
+static char *
+bonjour_jabber_packet_xml(PurpleBuddy *pb, xmlnode *packet)
+{
+    BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
+    char *peer = bb && bb->conversation && bb->conversation->buddy_name ?
+        barev_address_identity(bb->conversation->buddy_name, FALSE) : bonjour_buddy_identity(pb);
+    char *local = NULL, *xml = NULL;
+    if (bb && bb->conversation)
+        local = barev_address_identity(bonjour_jabber_get_local_jid(bb->conversation), FALSE);
+    if (peer && local) {
+        xmlnode_set_attrib(packet, "from", local);
+        xmlnode_set_attrib(packet, "to", peer);
+        xml = xmlnode_to_str(packet, NULL);
+    }
+    g_free(peer); g_free(local);
+    return xml;
+}
+
+/* Read both endpoints from the socket; interface enumeration cannot establish
+ * which local address actually owns this connection. */
+static gboolean
+bonjour_validate_endpoints(BonjourJabberConversation *bconv, const char *identity)
+{
+    struct sockaddr_storage peer, local;
+    socklen_t peer_len = sizeof(peer), local_len = sizeof(local);
+    struct in6_addr expected_peer, expected_local;
+    char *own = barev_address_identity(bonjour_get_jid(bconv->account), FALSE);
+    const char *at = identity ? strchr(identity, '@') : NULL;
+    gboolean valid = own && bconv->socket >= 0 &&
+        (!identity || (at && strcmp(own, identity) && inet_pton(AF_INET6, at+1, &expected_peer) == 1)) &&
+        inet_pton(AF_INET6, strchr(own, '@')+1, &expected_local) == 1 &&
+        getpeername(bconv->socket, (struct sockaddr *)&peer, &peer_len) == 0 &&
+        getsockname(bconv->socket, (struct sockaddr *)&local, &local_len) == 0 &&
+        peer.ss_family == AF_INET6 && local.ss_family == AF_INET6 &&
+        (((unsigned char *)&((struct sockaddr_in6 *)&peer)->sin6_addr)[0] == 2 ||
+         ((unsigned char *)&((struct sockaddr_in6 *)&peer)->sin6_addr)[0] == 3) &&
+        (!identity || !memcmp(&expected_peer, &((struct sockaddr_in6 *)&peer)->sin6_addr, 16)) &&
+        !memcmp(&expected_local, &((struct sockaddr_in6 *)&local)->sin6_addr, 16);
+    if (valid) {
+        char ip[INET6_ADDRSTRLEN];
+        inet_ntop(AF_INET6, &((struct sockaddr_in6 *)&peer)->sin6_addr, ip, sizeof(ip));
+        g_free(bconv->ip); bconv->ip = g_strdup(ip);
+        inet_ntop(AF_INET6, &expected_local, ip, sizeof(ip));
+        g_free(bconv->local_ip); bconv->local_ip = g_strdup(ip);
+    }
+    g_free(own);
     return valid;
 }
 
@@ -987,13 +948,12 @@ bonjour_candidate_wins_collision(PurpleBuddy *pb,
     if (!existing || existing == candidate)
         return TRUE;
 
-    if (existing->closing || existing->close_timeout != 0 || existing->socket < 0)
+    if (existing->closing || existing->close_timeout != 0)
         return TRUE;
 
-    /* A peer that has sent its stream header is proven usable.  Never reject
-     * it in favor of an outgoing connect which is still waiting for one. */
-    if (existing->recv_stream_start != candidate->recv_stream_start)
-        return candidate->recv_stream_start;
+    /* An established stream always wins over a newly arriving duplicate. */
+    if (existing->recv_stream_start && existing->sent_stream_start == FULLY_SENT)
+        return FALSE;
 
     /* Two connections in the same direction are duplicates.  Keep the first
      * one instead of allowing a late callback to replace a working stream. */
@@ -1001,12 +961,15 @@ bonjour_candidate_wins_collision(PurpleBuddy *pb,
         return FALSE;
 
     local_jid = bonjour_jabber_get_local_jid(candidate);
-    remote_jid = pb ? purple_buddy_get_name(pb) : NULL;
+    remote_jid = candidate->buddy_name;
 
     if (!local_jid || !remote_jid)
         return FALSE;
 
-    prefer_outgoing = (g_ascii_strcasecmp(local_jid, remote_jid) < 0);
+    {
+        int order = g_ascii_strcasecmp(local_jid, remote_jid);
+        prefer_outgoing = order < 0 || (order == 0 && strcmp(local_jid, remote_jid) < 0);
+    }
     return candidate->incoming ? !prefer_outgoing : prefer_outgoing;
 }
 
@@ -1257,8 +1220,7 @@ is_yggdrasil_addr(const char *host)
 
 /*
  * Return the local Yggdrasil IPv6 address for the given connected fd.
- * Tries getsockname() first; if that doesn't yield a Yggdrasil address,
- * falls back to bonjour_jabber_get_local_ips().
+ * Uses the actual socket endpoint and requires a Yggdrasil address.
  * Returns a g_malloc'd string the caller must g_free(), or NULL.
  */
 static gchar *
@@ -1279,96 +1241,7 @@ get_local_yggdrasil_ip(int fd)
             return g_strdup(buf);
     }
 
-    /* getsockname gave nothing useful — enumerate interfaces */
-    GSList *ips = bonjour_jabber_get_local_ips(-1);
-    if (ips) {
-        gchar *ip = g_strdup((const char *)ips->data);
-        g_slist_free_full(ips, g_free);
-        return ip;
-    }
-
     return NULL;
-}
-
-/* Barev/XEP-0174 helper:
- * Match "localpart@whatever" to a buddy whose name starts with "localpart@".
- * This lets us treat "inky@barev.local" the same as "inky@201:..." as long as
- * the nick ("inky") is the same.
- */
-static PurpleBuddy *
-bonjour_find_buddy_by_localpart(PurpleAccount *account, const char *jid)
-{
-    const char *at;
-    gchar *local = NULL;
-    PurpleBlistNode *gnode, *cnode, *bnode;
-    PurpleBuddy *found = NULL;
-    int matches = 0;
-
-    if (!account || !jid)
-        return NULL;
-
-    at = strchr(jid, '@');
-    if (!at || at == jid)
-        return NULL;
-
-    /* local = "inky" for "inky@barev.local" */
-    local = g_strndup(jid, (gsize)(at - jid));
-    if (!local)
-        return NULL;
-
-    for (gnode = purple_blist_get_root(); gnode; gnode = gnode->next) {
-        if (!PURPLE_BLIST_NODE_IS_GROUP(gnode))
-            continue;
-
-        for (cnode = gnode->child; cnode; cnode = cnode->next) {
-            if (!PURPLE_BLIST_NODE_IS_CONTACT(cnode))
-                continue;
-
-            for (bnode = cnode->child; bnode; bnode = bnode->next) {
-                PurpleBuddy *buddy;
-                const char *name;
-
-                if (!PURPLE_BLIST_NODE_IS_BUDDY(bnode))
-                    continue;
-
-                buddy = (PurpleBuddy *)bnode;
-
-                if (purple_buddy_get_account(buddy) != account)
-                    continue;
-
-                name = purple_buddy_get_name(buddy);
-                if (!name)
-                    continue;
-
-                /* Look for "local@" prefix or exact bare-nick match */
-                if ((g_str_has_prefix(name, local) && name[strlen(local)] == '@') ||
-                    g_str_equal(name, local)) {
-                    matches++;
-                    if (matches == 1) {
-                        found = buddy;
-                    } else {
-                        /* Ambiguous: more than one buddy shares the same localpart */
-                        purple_debug_warning("barev",
-                            "bonjour_find_buddy_by_localpart: ambiguous localpart '%s' for '%s' (at least '%s' and '%s')\n",
-                            local, jid,
-                            found ? purple_buddy_get_name(found) : "(null)",
-                            name);
-                        g_free(local);
-                        return NULL;
-                    }
-                }
-            }
-        }
-    }
-
-    if (found) {
-        purple_debug_info("barev",
-            "bonjour_find_buddy_by_localpart: '%s' -> '%s'\n",
-            jid, purple_buddy_get_name(found));
-    }
-
-    g_free(local);
-    return found;
 }
 
 void
@@ -1567,15 +1440,34 @@ _bonjour_handle_presence(PurpleBuddy *pb, xmlnode *presence_node)
     g_free(status_text);
 }
 
+static gboolean
+bonjour_jabber_frame_timeout(gpointer data)
+{
+  BonjourJabberConversation *bconv = data;
+  time_t deadline = bconv->recv_stream_start && bconv->sent_stream_start == FULLY_SENT ?
+      120 : PENDING_STREAM_TIMEOUT;
+  if (bconv->closing || bconv->close_timeout) {
+    bconv->frame_timer = 0;
+    return FALSE;
+  }
+  if (g_get_monotonic_time()-bconv->frame_started < deadline*G_USEC_PER_SEC) return TRUE;
+  bconv->frame_timer = 0;
+  bonjour_jabber_close_conversation(bconv);
+  return FALSE;
+}
+
 static BonjourJabberConversation *
 bonjour_jabber_conv_new(PurpleBuddy *pb, PurpleAccount *account, const char *ip) {
 
+  if (!bonjour_peer_allowed(account, ip)) return NULL;
   BonjourJabberConversation *bconv = g_new0(BonjourJabberConversation, 1);
+  barev_conversations = g_slist_prepend(barev_conversations, bconv);
   bconv->socket = -1;
   bconv->tx_buf = purple_circ_buffer_new(512);
   bconv->tx_handler = 0;
   bconv->rx_handler = 0;
   bconv->pb = pb;
+  bconv->buddy_name = pb ? bonjour_buddy_identity(pb) : NULL;
   bconv->account = account;
   bconv->ip = g_strdup(ip);
 
@@ -1586,6 +1478,8 @@ bonjour_jabber_conv_new(PurpleBuddy *pb, PurpleAccount *account, const char *ip)
   bconv->ping_response_timer = 0;
   bconv->last_ping_id = NULL;
   bconv->last_activity = time(NULL);
+  bconv->frame_started = g_get_monotonic_time();
+  bconv->frame_timer = purple_timeout_add_seconds(1, bonjour_jabber_frame_timeout, bconv);
   bconv->ping_failures = 0;
 
   bonjour_parser_setup(bconv);
@@ -1762,38 +1656,31 @@ _jabber_parse_and_write_message_to_ui(xmlnode *message_node, PurpleBuddy *pb)
   g_free(body);
 }
 
-struct _match_buddies_by_address_t {
-  const char *address;
-  GSList *matched_buddies;
-};
-
-static void
-_match_buddies_by_address(gpointer value, gpointer data)
+static gboolean
+bonjour_peer_allowed(PurpleAccount *account, const char *ip)
 {
-  PurpleBuddy *pb = value;
-  BonjourBuddy *bb = NULL;
-  struct _match_buddies_by_address_t *mbba = data;
-
-  bb = purple_buddy_get_protocol_data(pb);
-
-  /*
-   * If the current PurpleBuddy's data is not null, then continue to determine
-   * whether one of the buddies IPs matches the target IP.
-   */
-  if (bb != NULL)
-  {
-    const char *ip;
-    GSList *tmp = bb->ips;
-
-    while(tmp) {
-      ip = tmp->data;
-      if (ip != NULL && g_ascii_strcasecmp(ip, mbba->address) == 0) {
-        mbba->matched_buddies = g_slist_prepend(mbba->matched_buddies, pb);
-        break;
-      }
-      tmp = tmp->next;
-    }
+  struct in6_addr actual, expected;
+  GSList *buddies, *it;
+  gboolean known = FALSE;
+  unsigned connections = 0;
+  if (!ip || inet_pton(AF_INET6, ip, &actual) != 1 ||
+      g_slist_length(barev_conversations) >= 64) return FALSE;
+  buddies = purple_find_buddies(account, NULL);
+  for (it = buddies; it; it = it->next) {
+    char *identity = bonjour_buddy_identity(it->data);
+    if (identity && purple_buddy_get_protocol_data(it->data) &&
+        inet_pton(AF_INET6, strchr(identity, '@')+1, &expected) == 1 && !memcmp(&actual, &expected, 16))
+      known = TRUE;
+    g_free(identity);
   }
+  g_slist_free(buddies);
+  for (it = barev_conversations; it; it = it->next) {
+    BonjourJabberConversation *conversation = it->data;
+    if (conversation->account == account && conversation->ip &&
+        inet_pton(AF_INET6, conversation->ip, &expected) == 1 && !memcmp(&actual, &expected, 16))
+      ++connections;
+  }
+  return known && connections < 4;
 }
 
 static void
@@ -2028,7 +1915,7 @@ bonjour_jabber_send_presence(PurpleBuddy *pb,
     /* Barev: XEP-0153 avatar hash advertisement */
     barev_presence_add_avatar_update(presence_node, account);
 
-    xml = xmlnode_to_str(presence_node, NULL);
+    xml = bonjour_jabber_packet_xml(pb, presence_node);
     xmlnode_free(presence_node);
 
     ret = (_send_data(pb, xml) >= 0);
@@ -2186,16 +2073,13 @@ static gboolean bonjour_jabber_send_stream_init(BonjourJabberConversation *bconv
   char *stream_start;
   const char *bname = bconv->buddy_name;
 
-  if (bconv->pb != NULL)
-    bname = purple_buddy_get_name(bconv->pb);
-
-  /* If we have no idea who "to" is, use an empty string.
-   * If we don't know now, it is because the other side isn't playing nice, so they can't complain. */
-  if (bname == NULL)
-    bname = "";
-
-  stream_start = g_strdup_printf(DOCTYPE,
-      bonjour_jabber_get_local_jid(bconv), bname);
+  if (!bname || !bonjour_validate_endpoints(bconv, bname)) return FALSE;
+  {
+    char *from = g_markup_escape_text(bonjour_jabber_get_local_jid(bconv), -1);
+    char *to = g_markup_escape_text(bname, -1);
+    stream_start = g_strdup_printf(DOCTYPE, from, to);
+    g_free(from); g_free(to);
+  }
   len = strlen(stream_start);
 
   bconv->sent_stream_start = PARTIALLY_SENT;
@@ -2430,37 +2314,19 @@ _server_socket_handler(gpointer data, int server_socket, PurpleInputCondition co
 
   purple_debug_info("barev", "Received incoming connection from %s.\n", address_text);
 
-  /* Rest of the function remains the same... */
-  struct _match_buddies_by_address_t *mbba;
-  GSList *buddies;
-
-  mbba = g_new0(struct _match_buddies_by_address_t, 1);
-  mbba->address = address_text;
-
-  buddies = purple_find_buddies(jdata->account, NULL);
-  g_slist_foreach(buddies, _match_buddies_by_address, mbba);
-  g_slist_free(buddies);
-
-  if (mbba->matched_buddies == NULL)
-    purple_debug_warning("barev", "No buddy matched IP %s - proceeding to stream negotiation\n", address_text);
-
-  /* Clean up match structure */
-  if (mbba->matched_buddies)
-    g_slist_free(mbba->matched_buddies);
-  g_free(mbba);
-
   /* Create conversation for this connection */
   BonjourJabberConversation *bconv = bonjour_jabber_conv_new(NULL, jdata->account, address_text);
+  if (!bconv) {
+    purple_debug_warning("barev", "Rejecting unknown or over-limit peer %s\n", address_text);
+    close(client_socket);
+    return;
+  }
   bconv->incoming = TRUE;
   bconv->socket = client_socket;
 
-  {
-    gchar *ygg_ip = get_local_yggdrasil_ip(client_socket);
-    if (ygg_ip) {
-      g_free(bconv->local_ip);
-      bconv->local_ip = ygg_ip;
-      purple_debug_info("barev", "Incoming connection local Yggdrasil IP: %s\n", bconv->local_ip);
-    }
+  if (!bonjour_validate_endpoints(bconv, NULL)) {
+    bonjour_jabber_close_conversation(bconv);
+    return;
   }
 
   bconv->rx_handler = purple_input_add(client_socket, PURPLE_INPUT_READ, _client_socket_handler, bconv);
@@ -2736,391 +2602,53 @@ _connected_to_buddy(gpointer data, gint source, const gchar *error)
 void
 bonjour_jabber_conv_match_by_name(BonjourJabberConversation *bconv)
 {
-    PurpleBuddy     *pb     = NULL;
-    BonjourBuddy    *bb     = NULL;
-    BonjourJabber   *jdata  = NULL;
-    PurpleAccount   *account;
+    PurpleBuddy *pb = NULL;
+    BonjourBuddy *bb;
+    BonjourData *data;
+    GSList *buddies, *it;
+    char *canonical;
 
-    g_return_if_fail(bconv != NULL);
-    g_return_if_fail(bconv->ip != NULL);
+    if (!bconv || bconv->closing || bconv->close_timeout) return;
+    canonical = barev_address_identity(bconv->buddy_name, FALSE);
+    data = bconv->account && bconv->account->gc ? bconv->account->gc->proto_data : NULL;
+    if (!canonical || !data || !data->jabber_data ||
+        !bonjour_validate_endpoints(bconv, canonical)) goto rejected;
 
-    account = bconv->account;
-    if (!account || !account->gc || !account->gc->proto_data) {
-        purple_debug_error("barev",
-                           "conv_match_by_name: missing account or connection\n");
-        return;
+    /* Match a complete canonical identity, never just a nickname or IP. */
+    buddies = purple_find_buddies(bconv->account, NULL);
+    for (it = buddies; it; it = it->next) {
+        char *identity = bonjour_buddy_identity(it->data);
+        if (identity && !strcmp(identity, canonical) &&
+            (bconv->incoming || bconv->pb == it->data)) pb = it->data;
+        g_free(identity);
+        if (pb) break;
     }
-
-    jdata = ((BonjourData*) account->gc->proto_data)->jabber_data;
-    if (!jdata) {
-        purple_debug_error("barev",
-                           "conv_match_by_name: no jabber_data\n");
-        return;
-    }
-
-    /* If we have no buddy_name at all, we can only try IP matching. */
-    if (!bconv->buddy_name) {
-        purple_debug_info("barev",
-                          "conv_match_by_name: buddy_name is NULL, trying IP match only\n");
-        bonjour_jabber_conv_match_by_ip(bconv);
-        return;
-    }
-
-    pb = purple_find_buddy(account, bconv->buddy_name);
-
-    if (!pb) {
-        purple_debug_info("barev",
-                          "conv_match_by_name: no buddy named '%s'\n",
-                          bconv->buddy_name ? bconv->buddy_name : "(null)");
-
-        /* 2) Barev-style fallback: localpart match, but only if UNIQUE. */
-        pb = bonjour_find_buddy_by_localpart(account, bconv->buddy_name);
-
-        if (!pb) {
-            purple_debug_info("barev",
-                "conv_match_by_name: no unique buddy named/localpart '%s'; trying IP match for %s\n",
-                bconv->buddy_name ? bconv->buddy_name : "(null)",
-                bconv->ip ? bconv->ip : "(no ip)");
-
-            /* 3) IP match — preserve buddy_name across the call: conv_match_by_ip
-             * clears it internally, but the second validate_ip_consistency below
-             * needs it as a JID fallback when the matched buddy is a bare nick. */
-            gchar *saved_buddy_name = g_strdup(bconv->buddy_name);
-            bonjour_jabber_conv_match_by_ip(bconv);
-            if (bconv->buddy_name == NULL)
-                bconv->buddy_name = saved_buddy_name;
-            else
-                g_free(saved_buddy_name);
-            if (bconv->closing || bconv->close_timeout != 0)
-                return;
-            pb = bconv->pb;
-        }
-    }
-
-    /* If still nothing, we cannot attach this conversation. */
-    if (!pb) {
-        purple_debug_warning("barev",
-            "conv_match_by_name: unable to match conversation (buddy_name='%s', ip='%s')\n",
-            bconv->buddy_name ? bconv->buddy_name : "(null)",
-            bconv->ip ? bconv->ip : "(no ip)");
-        return;
-    }
-
-    /* Attach the buddy to this conversation (whatever your code does next). */
-    bconv->pb = pb;
-
-    /* We have a PurpleBuddy – get its BonjourBuddy data. */
-    bb = purple_buddy_get_protocol_data(pb);
-    if (!bb) {
-        purple_debug_warning("barev",
-                             "conv_match_by_name: buddy '%s' has no protocol data; trying IP match\n",
-                             purple_buddy_get_name(pb));
-
-        /* Fall back to IP match */
-        gchar *saved_buddy_name2 = g_strdup(bconv->buddy_name);
-        bonjour_jabber_conv_match_by_ip(bconv);
-        if (bconv->buddy_name == NULL)
-            bconv->buddy_name = saved_buddy_name2;
-        else
-            g_free(saved_buddy_name2);
-        if (bconv->closing || bconv->close_timeout != 0)
-            return;
-        pb = bconv->pb;
-
-        if (!pb) {
-            purple_debug_warning("barev",
-                                 "conv_match_by_name: IP match failed after missing protocol data\n");
-            return;
-        }
-
-        bb = purple_buddy_get_protocol_data(pb);
-        if (!bb) {
-            purple_debug_warning("barev",
-                                 "conv_match_by_name: IP-matched buddy '%s' still has no protocol data\n",
-                                 purple_buddy_get_name(pb));
-            return;
-        }
-
-        /* Ensure conversation points at the new pb */
-        bconv->pb = pb;
-    }
-
-
-    purple_debug_info("barev",
-                      "Matched buddy %s to incoming conversation \"from\" attrib "
-                      "(buddy_name=%s, conv IP=%s)\n",
-                      purple_buddy_get_name(pb),
-                      bconv->buddy_name ? bconv->buddy_name : "(null)",
-                      bconv->ip ? bconv->ip : "(null)");
-
-    bconv->pb = pb;
-
-    /* Validate the candidate before disturbing an already working stream.
-     * If the buddy is stored as a bare nick (no '@'), the buddy name has no IP
-     * to check against; use the stream's from-JID instead, which carries the
-     * peer's claimed IP that getpeername() will verify.
-     *
-     * Exception: when the buddy was added with a hostname JID (e.g.
-     * "inky@lovelace") and bb->ips is still empty, validate_ip_consistency
-     * would extract "lovelace" as the expected IP and reject the real Yggdrasil
-     * peer address.  Skip the check in that case — the IP-learning block below
-     * will record the address verified by getpeername() and persist it. */
-    {
-      const char *jid_for_validation = purple_buddy_get_name(pb);
-      if (!strchr(jid_for_validation, '@'))
-          jid_for_validation = bconv->buddy_name;
-
-      gboolean skip_ip_check = FALSE;
-      bb = purple_buddy_get_protocol_data(pb);
-      if (bb && !bb->ips) {
-        const char *at = strchr(jid_for_validation, '@');
-        if (at) {
-          struct in6_addr dummy;
-          if (inet_pton(AF_INET6, at + 1, &dummy) != 1)
-            skip_ip_check = TRUE;
-        }
-      }
-
-      if (skip_ip_check) {
-        purple_debug_info("barev",
-            "conv_match_by_name: skipping IP validation for hostname buddy '%s'"
-            " with no known IPs — will learn IP from this connection\n",
-            purple_buddy_get_name(pb));
-      } else if (!validate_ip_consistency(bconv, jid_for_validation)) {
-        purple_debug_error("barev",
-          "Closing connection due to IP mismatch for %s\n",
-          purple_buddy_get_name(pb));
-        async_bonjour_jabber_close_conversation(bconv);
-        return;
-      }
-    }
-
-    /* If the buddy had no known IPs (bare-nick or hostname entry), learn this
-     * IP now that the connection has been accepted. */
-    bb = purple_buddy_get_protocol_data(pb);
-    if (bb && !bb->ips && bconv->ip) {
-        bb->ips = g_slist_append(NULL, g_strdup(bconv->ip));
-        bonjour_buddy_save_to_blist(pb, bconv->ip,
-            bb->port_p2pj > 0 ? bb->port_p2pj : BONJOUR_DEFAULT_PORT);
-        purple_debug_info("barev",
-            "Learned IP %s for buddy %s from verified connection\n",
-            bconv->ip, purple_buddy_get_name(pb));
-        /* Persist immediately so the IP survives an unclean shutdown */
-        barev_save_persistent_contacts(bconv->account);
-    }
-
-    if (bb->conversation != NULL && bb->conversation != bconv) {
-      BonjourJabberConversation *existing = bb->conversation;
-
-      if (!bonjour_candidate_wins_collision(pb, existing, bconv)) {
-        purple_debug_info("barev",
-            "Keeping existing %s connection for %s; rejecting duplicate %s connection\n",
-            existing->incoming ? "incoming" : "outgoing",
-            purple_buddy_get_name(pb),
-            bconv->incoming ? "incoming" : "outgoing");
-        async_bonjour_jabber_close_conversation(bconv);
-        return;
-      }
-
-      purple_debug_info("barev",
-          "Replacing existing %s connection for %s with deterministic %s winner\n",
-          existing->incoming ? "incoming" : "outgoing",
-          purple_buddy_get_name(pb),
-          bconv->incoming ? "incoming" : "outgoing");
-      bonjour_jabber_close_conversation(existing);
-    }
-
-    /* Attach conv. to buddy and remove from pending list */
-    jdata->pending_conversations =
-        g_slist_remove(jdata->pending_conversations, bconv);
-    bb->conversation = bconv;
-
-    purple_debug_info("barev", "Setting bb->conversation for %s to %p\n",
-                  purple_buddy_get_name(pb), bconv);
-
-    /* Normalize buddy_name to the canonical buddy name, e.g. "inky@201:..." */
-    if (bconv->buddy_name) {
-        g_free(bconv->buddy_name);
-    }
-    bconv->buddy_name = g_strdup(purple_buddy_get_name(pb));
-
-    purple_debug_info("barev",
-                      "conv_match_by_name: matched conversation to buddy '%s'\n",
-                      bconv->buddy_name);
-}
-
-
-
-void bonjour_jabber_conv_match_by_ip(BonjourJabberConversation *bconv) {
-  BonjourJabber *jdata;
-  struct _match_buddies_by_address_t *mbba;
-  GSList *buddies;
-
-  g_return_if_fail(bconv != NULL);
-  g_return_if_fail(bconv->account != NULL);
-  g_return_if_fail(bconv->account->gc != NULL);
-  g_return_if_fail(bconv->account->gc->proto_data != NULL);
-
-  jdata = ((BonjourData*) bconv->account->gc->proto_data)->jabber_data;
-  g_return_if_fail(jdata != NULL);
-
-  /* This routine is a fallback matcher.  Do not leave a previous tentative
-   * association in place if every IP candidate is rejected. */
-  bconv->pb = NULL;
-
-  /* Normalize IPv6 address if needed */
-  if (bconv->ip && strchr(bconv->ip, ':')) {
-    /* This is an IPv6 address - normalize it */
-    char normalized_ip[INET6_ADDRSTRLEN];
-    struct in6_addr addr6;
-
-    if (inet_pton(AF_INET6, bconv->ip, &addr6) == 1) {
-      if (inet_ntop(AF_INET6, &addr6, normalized_ip, sizeof(normalized_ip))) {
-        /* Update the IP to normalized form */
-        g_free(bconv->ip);
-        bconv->ip = g_strdup(normalized_ip);
-        purple_debug_info("barev", "Normalized IPv6 address to: %s\n", bconv->ip);
-      }
-    }
-  }
-
-  purple_debug_info("barev", "Trying to match buddy by IP: %s\n", bconv->ip);
-
-  mbba = g_new0(struct _match_buddies_by_address_t, 1);
-  mbba->address = bconv->ip;
-
-  buddies = purple_find_buddies(jdata->account, NULL);
-  g_slist_foreach(buddies, _match_buddies_by_address, mbba);
-  g_slist_free(buddies);
-
-  /* We've failed to match a buddy - give up */
-  if (mbba->matched_buddies == NULL) {
-    purple_debug_warning("barev", "Failed to match buddy by IP %s - keeping connection open for stream negotiation\n", bconv->ip);
-    g_free(mbba);
-
-    /* Don't close the connection yet - wait for stream header */
-    /* The buddy might be identified by the 'from' attribute in the stream */
-    return;
-  }
-
-  /* We've found our buddy */
-  GSList *buddies_in = mbba->matched_buddies;
-  while(buddies_in) {
-    PurpleBuddy *pb = buddies_in->data;
-    BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
-
-    purple_debug_info("barev", "Matched buddy %s to incoming connection from %s\n",
-      purple_buddy_get_name(pb), bconv->ip);
-
-    /* Check that we're not connecting to ourselves */
-    if (purple_strequal(purple_account_get_username(pb->account), pb->name)) {
-      purple_debug_info("barev", "We don't want to talk to ourselves\n");
-      /* We can't delete the bconv here, but we can unassociate ourselves from it */
-      bconv->pb = NULL;
-      g_slist_free(mbba->matched_buddies);
-      g_free(mbba);
-      return;
-    }
-
-   if (bconv->buddy_name &&
-        PURPLE_BLIST_NODE_SHOULD_SAVE((PurpleBlistNode *)pb) &&
-        !purple_strequal(bconv->buddy_name, purple_buddy_get_name(pb))) {
-      /* Allow bare-nick buddies (Haze strips @ip during roster sync) to match
-       * a full JID stream-from when the localpart is the same — the IP match
-       * already confirmed which endpoint we are talking to. */
-      const char *pb_name = purple_buddy_get_name(pb);
-      const char *at = strchr(bconv->buddy_name, '@');
-      gboolean localpart_ok = (!strchr(pb_name, '@') && at &&
-                               (gsize)(at - bconv->buddy_name) == strlen(pb_name) &&
-                               strncmp(bconv->buddy_name, pb_name, strlen(pb_name)) == 0);
-      if (!localpart_ok) {
-        purple_debug_warning("barev",
-            "Buddy %s is manually saved but remote claims to be '%s' (IP %s) - "
-            "rejecting IP-only match (name mismatch)\n",
-            pb_name, bconv->buddy_name, bconv->ip);
-        buddies_in = buddies_in->next;
-        continue;
-      }
-      purple_debug_info("barev",
-          "Bare-nick buddy '%s' accepting stream from '%s' by localpart (IP already verified)\n",
-          pb_name, bconv->buddy_name);
-    }
+    g_slist_free(buddies);
+    if (!pb || !(bb = purple_buddy_get_protocol_data(pb))) goto rejected;
 
     g_free(bconv->buddy_name);
-    bconv->buddy_name = NULL;
-
+    bconv->buddy_name = canonical;
+    canonical = NULL;
+    if (!bonjour_candidate_wins_collision(pb, bb->conversation, bconv)) goto rejected;
+    if (bb->conversation && bb->conversation != bconv) {
+        BonjourJabberConversation *old = bb->conversation;
+        /* Detach the losing stream so teardown cannot reset the winner. */
+        bb->conversation = bconv;
+        bonjour_jabber_close_conversation(old);
+    }
     bconv->pb = pb;
-
-    if (!validate_ip_consistency(bconv, purple_buddy_get_name(pb))) {
-      purple_debug_error("barev",
-        "Closing connection due to IP mismatch for %s\n",
-        purple_buddy_get_name(pb));
-      async_bonjour_jabber_close_conversation(bconv);
-      g_slist_free(mbba->matched_buddies);
-      g_free(mbba);
-      return;
-    }
-
-    if (bb->conversation != NULL && bb->conversation != bconv) {
-      BonjourJabberConversation *existing = bb->conversation;
-
-      if (!bonjour_candidate_wins_collision(pb, existing, bconv)) {
-        purple_debug_info("barev",
-            "Keeping existing %s connection for %s; rejecting duplicate %s connection\n",
-            existing->incoming ? "incoming" : "outgoing",
-            purple_buddy_get_name(pb),
-            bconv->incoming ? "incoming" : "outgoing");
-        async_bonjour_jabber_close_conversation(bconv);
-        g_slist_free(mbba->matched_buddies);
-        g_free(mbba);
-        return;
-      }
-
-      purple_debug_info("barev",
-          "Replacing existing %s connection for %s with deterministic %s winner\n",
-          existing->incoming ? "incoming" : "outgoing",
-          purple_buddy_get_name(pb),
-          bconv->incoming ? "incoming" : "outgoing");
-      bonjour_jabber_close_conversation(existing);
-    }
-
     bb->conversation = bconv;
-    purple_debug_info("barev", "Setting bb->conversation for %s to %p\n",
-                  purple_buddy_get_name(pb), bconv);
+    data->jabber_data->pending_conversations =
+        g_slist_remove(data->jabber_data->pending_conversations, bconv);
+    return;
 
-    /* Break because we only want to match one buddy */
-    break;
-  }
-
-  if (bconv->pb == NULL) {
-    purple_debug_warning("barev",
-        "All IP-matched buddies for %s were rejected (likely name mismatches) - "
-        "connection remains unassociated\n", bconv->ip);
-  }
-
-
-  g_slist_free(mbba->matched_buddies);
-  g_free(mbba);
-
-  /* Only an associated conversation leaves the pending set.  Otherwise keep
-   * it there so shutdown/EOF cleanup still owns it. */
-  if (bconv->pb != NULL && jdata->pending_conversations) {
-    jdata->pending_conversations = g_slist_remove(jdata->pending_conversations, bconv);
-  }
-
-  /* We've associated the conversation with a buddy.  Yay! */
-  /* If the stream has been completely started and we know who we're talking to, we can start doing stuff. */
-  /* I don't think the circ_buffer can actually contain anything without a buddy being associated, but lets be explicit. */
-  if (bconv->sent_stream_start == FULLY_SENT && bconv->recv_stream_start && bconv->pb != NULL
-      && purple_circ_buffer_get_max_read(bconv->tx_buf) > 0) {
-    /* Watch for when we can write the buffered messages */
-    bconv->tx_handler = purple_input_add(bconv->socket, PURPLE_INPUT_WRITE,
-      _send_data_write_cb, bconv);
-    /* We can probably write the data right now. */
-    _send_data_write_cb(bconv, bconv->socket, PURPLE_INPUT_WRITE);
-  }
-
+rejected:
+    g_free(canonical);
+    purple_debug_warning("barev", "Rejecting unexpected contact identity or duplicate stream\n");
+    async_bonjour_jabber_close_conversation(bconv);
 }
+
+
 
 static void
 _connected_to_buddy_direct(gpointer data, gint socket, PurpleInputCondition condition)
@@ -3217,7 +2745,13 @@ _find_or_start_conversation(BonjourJabber *jdata, const gchar *to)
       return NULL;
     }
 
+    char *identity = bonjour_buddy_identity(pb);
+    struct in6_addr expected, target;
     const char *ip = bb->ips->data; /* Start with the first IP address. */
+    gboolean valid = identity && inet_pton(AF_INET6, strchr(identity, '@')+1, &expected) == 1 &&
+        inet_pton(AF_INET6, ip, &target) == 1 && !memcmp(&expected, &target, 16);
+    g_free(identity);
+    if (!valid) return NULL;
 
     purple_debug_info("barev", "Starting conversation with %s at %s:%d\n", to, ip, bb->port_p2pj);
 
@@ -3288,6 +2822,7 @@ _find_or_start_conversation(BonjourJabber *jdata, const gchar *to)
                     BonjourJabberConversation *bconv;
 
                     bconv = bonjour_jabber_conv_new(pb, jdata->account, ip);
+                    if (!bconv) { close(sock); return NULL; }
                     bconv->remote_port = bb->port_p2pj;
                     bb->conversation = bconv;
                     purple_debug_info("barev", "Setting bb->conversation for %s to %p\n",
@@ -3340,6 +2875,7 @@ _find_or_start_conversation(BonjourJabber *jdata, const gchar *to)
     BonjourJabberConversation *bconv;
 
     bconv = bonjour_jabber_conv_new(pb, jdata->account, ip);
+    if (!bconv) { g_free(host_for_connect); return NULL; }
     bconv->ip_link = ip;
     bconv->remote_port = bb->port_p2pj;
     bb->conversation = bconv;
@@ -3472,7 +3008,7 @@ bonjour_jabber_send_message(BonjourJabber *jdata, const gchar *to, const gchar *
     xmlnode_set_namespace(node, "jabber:x:event");
     xmlnode_insert_child(node, xmlnode_new("composing"));
 
-    message = xmlnode_to_str(message_node, NULL);
+    message = bonjour_jabber_packet_xml(pb, message_node);
     xmlnode_free(message_node);
 
     ret = (_send_data(pb, message) >= 0);
@@ -3560,6 +3096,12 @@ bonjour_jabber_close_conversation(BonjourJabberConversation *bconv)
 
   bonjour_jabber_stop_ping(bconv);
 
+  if (bconv->frame_timer) {
+    guint timer = bconv->frame_timer;
+    bconv->frame_timer = 0;
+    purple_timeout_remove(timer);
+  }
+
   if (bconv->account && bconv->account->gc &&
       PURPLE_CONNECTION_IS_VALID(bconv->account->gc) &&
       bconv->account->gc->proto_data) {
@@ -3589,7 +3131,7 @@ bonjour_jabber_close_conversation(BonjourJabberConversation *bconv)
   }
 
   /* Cancel file transfers which have not started yet. */
-  if (pb && bd) {
+  if (was_current && bd) {
     GSList *xfers = bd->xfer_lists;
     while (xfers != NULL) {
       PurpleXfer *xfer = xfers->data;
@@ -3664,6 +3206,7 @@ bonjour_jabber_close_conversation(BonjourJabberConversation *bconv)
   g_free(bconv->buddy_name);
   g_free(bconv->ip);
   g_free(bconv->local_ip);
+  barev_conversations = g_slist_remove(barev_conversations, bconv);
   g_free(bconv);
 }
 
@@ -3773,7 +3316,7 @@ xep_iq_send_and_free(XepIq *iq)
   /* Send the message */
   if (pb != NULL) {
     /* Convert xml node into stream */
-    gchar *msg = xmlnode_to_str(iq->node, NULL);
+    gchar *msg = bonjour_jabber_packet_xml(pb, iq->node);
     ret = _send_data(pb, msg);
     g_free(msg);
   }
@@ -3790,10 +3333,13 @@ bonjour_jabber_send_xml(BonjourJabberConversation *bconv, xmlnode *node)
 {
   gchar *str;
   int ret = -1;
+  BonjourBuddy *bb;
 
-  if (!bconv || !node || !bconv->pb)
+  if (!bconv || !node || !bconv->pb || bconv->closing || bconv->close_timeout)
     return -1;
-  str = xmlnode_to_str(node, NULL);
+  bb = purple_buddy_get_protocol_data(bconv->pb);
+  if (!bb || bb->conversation != bconv) return -1;
+  str = bonjour_jabber_packet_xml(bconv->pb, node);
   if (!str)
     return -1;
   ret = _send_data(bconv->pb, str);
@@ -3942,7 +3488,7 @@ void bonjour_jabber_send_ping_request(BonjourJabberConversation *bconv) {
   xmlnode *ping = xmlnode_new_child(iq, "ping");
   xmlnode_set_namespace(ping, "urn:xmpp:ping");
 
-  char *xml = xmlnode_to_str(iq, NULL);
+  char *xml = bonjour_jabber_packet_xml(bconv->pb, iq);
   xmlnode_free(iq);
 
   BonjourBuddy *bb_ping = purple_buddy_get_protocol_data(bconv->pb);
@@ -3988,7 +3534,7 @@ gboolean bonjour_jabber_handle_ping(xmlnode *packet, BonjourJabberConversation *
       xmlnode_set_attrib(response, "to", xmlnode_get_attrib(packet, "from"));
       xmlnode_set_attrib(response, "from", xmlnode_get_attrib(packet, "to"));
 
-      char *xml = xmlnode_to_str(response, NULL);
+      char *xml = bconv->pb ? bonjour_jabber_packet_xml(bconv->pb, response) : NULL;
       xmlnode_free(response);
 
       gboolean send_ok = FALSE;
@@ -4013,7 +3559,6 @@ gboolean bonjour_jabber_handle_ping(xmlnode *packet, BonjourJabberConversation *
       if (bconv->pb) {
           bconv->last_activity = time(NULL);
           bconv->ping_failures = 0;
-          bconv->recv_stream_start = TRUE;
       }
 
       return TRUE;
@@ -4070,7 +3615,7 @@ bonjour_jabber_send_typing(PurpleBuddy *pb, PurpleTypingState state)
     }
     xmlnode_set_namespace(cs, "http://jabber.org/protocol/chatstates");
 
-    xml = xmlnode_to_str(message_node, NULL);
+    xml = bonjour_jabber_packet_xml(pb, message_node);
     xmlnode_free(message_node);
 
     _send_data(pb, xml);

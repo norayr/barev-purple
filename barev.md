@@ -52,11 +52,15 @@ reference, malformed-input, information-window, alias, and persistence tests.
 
 ### 2. Connection Model: One Pipe Per Buddy
 **Key Principle**: Each buddy pair maintains exactly ONE active TCP connection:
-- First connection established wins (whoever connects first)
+- An established connection is preserved when a duplicate arrives.
 - Same pipe handles all bidirectional communication
 - Subsequent connection attempts are either:
   - Rejected if from unknown IP
-  - Replace existing pipe if from known buddy
+  - Rejected when an established pipe already exists
+- Simultaneous pending connections use a deterministic identity order: compare
+  canonical identities ignoring ASCII case, then use their exact spelling to
+  distinguish case-only nicknames. The smaller identity keeps its outgoing
+  connection; the larger identity keeps its incoming connection.
 - Once connected, all communication flows through this single pipe until it dies
 
 ---
@@ -99,10 +103,34 @@ The **RECEIVER** responds with their stream header:
 ```
 
 **Critical Rules:**
-1. `from` attribute must match actual source IP
-2. `to` attribute must match exactly what's in buddy list
-3. Stream headers are exchanged exactly once per connection
-4. The pipe is now established for all future communication
+1. The opening element must be `stream` in the
+   `http://etherx.jabber.org/streams` namespace. XML uses UTF-8 and version 1.0.
+2. An unqualified, nonempty `from` attribute must identify a saved contact. Its
+   decoded IPv6 address must match the actual socket peer. Nickname case is
+   significant. An outgoing connection must identify the contact it was opened
+   for, even when several contacts share the same address.
+3. The local socket address must match the account's Yggdrasil IPv6 address.
+   Incoming connections require an already saved peer address; there can be at
+   most four connections to or from one peer address per account, and 64
+   connections across all accounts.
+4. If present, `to` must identify the local account, and `version` must be `1.0`.
+   Numeric IPv6 variants and encoded Barev addresses are compared by canonical
+   identity. A saved Haze nickname uses its explicitly stored IPv6 address.
+5. Stream headers are exchanged once. An empty or repeated stream opening,
+   malformed XML, and a DOCTYPE declaration cause the connection to close.
+6. On every subsequent top-level stanza, optional `from` and `to` attributes must
+   match the established peer and local account. Stanzas in `jabber:client` are
+   processed; other namespaces are ignored, except that a stream error closes
+   the connection. Offline presence also closes the connection.
+
+The opening header is limited to 4096 bytes and must complete within 30 seconds.
+Stanzas are limited to 524288 bytes, 24 element levels and 512 nodes, including
+attributes and text fragments;
+unfinished frames expire after 120 seconds on established connections. Invalid
+or incomplete input cannot be used to postpone these deadlines indefinitely.
+
+Run `make test-parser` for stream identity, namespace, recipient, version,
+collision, input-limit, connection-admission and deadline regressions.
 
 ---
 

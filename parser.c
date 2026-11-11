@@ -21,507 +21,315 @@
  *
  */
 #include "internal.h"
-
 #include <libxml/parser.h>
-
-#include "connection.h"
+#include "address.h"
 #include "debug.h"
 #include "jabber.h"
 #include "parser.h"
-#include "buddy.h"
 #include "util.h"
 #include "xmlnode.h"
 
-/*
- * Return TRUE if the named buddy exists in roster AND has this IP
- * in its allowed IP list.
- */
-static gboolean
-buddy_name_allows_ip(PurpleAccount *account, const char *name, const char *ip)
+#define STREAM_NS "http://etherx.jabber.org/streams"
+#define CLIENT_NS "jabber:client"
+#define HEADER_LIMIT 4096
+#define STANZA_LIMIT 524288
+
+static guint64
+parser_position(BonjourJabberConversation *bconv)
 {
-  PurpleBuddy *pb;
-  BonjourBuddy *bb;
-  GSList *ip_iter;
-
-  if (!account || !name || !ip)
-    return FALSE;
-
-  pb = purple_find_buddy(account, name);
-  if (!pb)
-    return FALSE;
-
-  bb = purple_buddy_get_protocol_data(pb);
-  if (!bb || !bb->ips)
-    return FALSE;
-
-  for (ip_iter = bb->ips; ip_iter; ip_iter = ip_iter->next) {
-    if (g_strcmp0((const char *)ip_iter->data, ip) == 0)
-      return TRUE;
-  }
-
-  return FALSE;
+  xmlParserInput *input = bconv->context->input;
+  return input->consumed + (guint64)(input->cur-input->base);
 }
 
-static gboolean
-ip_in_list(GSList *ips, const char *ip)
+static void
+parser_reject(BonjourJabberConversation *bconv, const char *reason)
 {
-    GSList *it;
-    if (!ips || !ip) return FALSE;
-    for (it = ips; it; it = it->next) {
-        if (it->data && g_strcmp0((const char *)it->data, ip) == 0)
-            return TRUE;
-    }
-    return FALSE;
+  purple_debug_warning("barev", "Rejecting peer stream: %s\n", reason);
+  async_bonjour_jabber_close_conversation(bconv);
 }
 
-
-static gboolean
-parse_from_attrib_and_find_buddy(BonjourJabberConversation *bconv, int nb_attributes, const xmlChar **attributes) {
+/* SAX2 attribute values are length-delimited and can contain escaped entities. */
+static char *
+parser_attribute(int count, const xmlChar **attributes, const char *name)
+{
   int i;
-
-  /* If the "from" attribute is specified, attach it to the conversation. */
-  for(i=0; i < nb_attributes * 5; i+=5) {
-    if(!xmlStrcmp(attributes[i], (xmlChar*) "from") && attributes[i+2] == NULL) {
-      int len = attributes[i+4] - attributes[i+3];
-      if (len <= 0)
-        return FALSE;
-      char *from_jid = g_strndup((char *)attributes[i+3], len);
-
-      purple_debug_info("barev",
-          "parse_from: from_jid='%s' bconv->pb=%s bconv->buddy_name='%s' ip='%s'\n",
-          from_jid,
-          bconv->pb ? purple_buddy_get_name(bconv->pb) : "(null)",
-          bconv->buddy_name ? bconv->buddy_name : "(null)",
-          bconv->ip ? bconv->ip : "(null)");
-
-      /* If we already have a buddy attached, check if the "from" matches */
-      if (bconv->pb != NULL) {
-          const char *current_buddy_name = purple_buddy_get_name(bconv->pb);
-
-          if (g_strcmp0(current_buddy_name, from_jid) != 0) {
-              /* "from" doesn't match current buddy. But check if current buddy's IP is correct first! */
-              BonjourBuddy *bb = purple_buddy_get_protocol_data(bconv->pb);
-
-              if (bb && bb->ips && bconv->ip) {
-
-                  /*
-                   * Barev multi-identity: if the peer *claims* a JID that exists in our roster
-                   * and that buddy allows this IP, then bind to the claimed JID.
-                   */
-                  PurpleBuddy *claimed_pb = purple_find_buddy(bconv->account, from_jid);
-                  if (claimed_pb) {
-                      BonjourBuddy *claimed_bb = purple_buddy_get_protocol_data(claimed_pb);
-                      if (claimed_bb && claimed_bb->ips && ip_in_list(claimed_bb->ips, bconv->ip)) {
-
-                          /* If this conversation is an outgoing connection, enforce roster port too. */
-                          if (bconv->remote_port > 0 && claimed_bb->port_p2pj > 0 && claimed_bb->port_p2pj != bconv->remote_port) {
-                              purple_debug_warning("barev",
-                                  "Port mismatch for claimed JID %s: roster port %d, connected port %d (not rebinding)\n",
-                                  from_jid, claimed_bb->port_p2pj, bconv->remote_port);
-                              /* keep current buddy */
-                          }
-                          else
-                          {
-
-                            purple_debug_info("barev",
-                              "Stream 'from=%s' differs from connected buddy '%s', "
-                              "but claimed JID is a known buddy for IP %s. Rebinding to claimed JID.\n",
-                              from_jid, current_buddy_name, bconv->ip);
-
-                            /* Clear old association before rebinding */
-                            if (bb && bb->conversation == bconv)
-                                bb->conversation = NULL;
-                            bconv->pb = NULL;
-
-                            if (bconv->buddy_name) {
-                                g_free(bconv->buddy_name);
-                                bconv->buddy_name = NULL;
-                            }
-                            bconv->buddy_name = g_strdup(from_jid);
-
-                            bonjour_jabber_conv_match_by_name(bconv);
-                            g_free(from_jid);
-                            return TRUE;
-                          }
-                      }
-                  }
-
-                  /* Check if connection IP matches current buddy's IP list */
-                  GSList *ip_iter = bb->ips;
-                  gboolean current_buddy_ip_matches = FALSE;
-
-                  while (ip_iter) {
-                      if (g_strcmp0(ip_iter->data, bconv->ip) == 0) {
-                          current_buddy_ip_matches = TRUE;
-                          break;
-                      }
-                      ip_iter = ip_iter->next;
-                  }
-
-                  if (current_buddy_ip_matches) {
-                      /* Current buddy is correct by IP. Don't switch! Remote is lying about JID. */
-                      //purple_debug_warning("barev",
-                      //    "Stream 'from=%s' doesn't match connected buddy '%s', "
-                      //    "but connection IP %s matches current buddy's IP list. "
-                      //    "Keeping current buddy (remote JID claim rejected).\n",
-                      //    from_jid, current_buddy_name, bconv->ip);
-                      //g_free(from_jid);
-                      //return TRUE;
-                      /*
-                       * Barev: multiple identities may legitimately share one IP.
-                       * If the claimed JID is a known buddy AND that buddy allows this IP,
-                       * prefer the claimed JID. Otherwise keep the current buddy as a spoofing guard.
-                       */
-                      if (!buddy_name_allows_ip(bconv->account, from_jid, bconv->ip)) {
-                          purple_debug_warning("barev",
-                              "Stream 'from=%s' doesn't match connected buddy '%s', "
-                              "and connection IP %s matches current buddy's IP list. "
-                              "Claimed JID is not a known buddy for this IP; keeping current buddy.\n",
-                              from_jid, current_buddy_name, bconv->ip);
-                          g_free(from_jid);
-                          return TRUE;
-                      }
-
-                      purple_debug_info("barev",
-                          "Stream 'from=%s' doesn't match connected buddy '%s', "
-                          "but both buddies allow IP %s. Switching to claimed JID (Barev multi-identity).\n",
-                          from_jid, current_buddy_name, bconv->ip);
-                      /* fall through: clear old association and re-match by name */
-
-                  }
-              }
-
-              purple_debug_warning("barev",
-                  "Stream 'from=%s' doesn't match connected buddy '%s'. "
-                  "Trying to find correct buddy.\n",
-                  from_jid, current_buddy_name);
-
-              /* Clear the old buddy association */
-              if (bb && bb->conversation == bconv) {
-                  bb->conversation = NULL;
-              }
-              bconv->pb = NULL;
-          } else {
-              /* "from" matches our current buddy, all good */
-              purple_debug_info("barev",
-                  "Stream 'from=%s' matches current buddy.\n", from_jid);
-              g_free(from_jid);
-              return TRUE;
-          }
-      }
-
-      /* Set the buddy_name from the "from" attribute and try to match */
-      g_free(bconv->buddy_name);
-      bconv->buddy_name = from_jid;
-      /* Matching can replace and free buddy_name, including from_jid. */
-      bonjour_jabber_conv_match_by_name(bconv);
-
-      purple_debug_info("barev",
-          "parse_from: after conv_match_by_name for '%s': pb=%s\n",
-          bconv->buddy_name ? bconv->buddy_name : "(null)",
-          bconv->pb ? purple_buddy_get_name(bconv->pb) : "(null)");
-
-      return (bconv->pb != NULL);
+  for (i = 0; i < count * 5; i += 5) {
+    if (!attributes[i+2] && !xmlStrcmp(attributes[i], (const xmlChar *)name)) {
+      char *escaped = g_strndup((const char *)attributes[i+3], attributes[i+4]-attributes[i+3]);
+      char *value = purple_unescape_text(escaped);
+      g_free(escaped);
+      return value;
     }
   }
+  return NULL;
+}
 
-  return FALSE;
+static gboolean
+parser_address_matches(const char *value, const char *expected)
+{
+  char *canonical;
+  gboolean matches;
+  if (!value) return TRUE;
+  canonical = barev_address_identity(value, FALSE);
+  matches = canonical && expected && !strcmp(canonical, expected);
+  g_free(canonical);
+  return matches;
 }
 
 static void
 bonjour_parser_element_start_libxml(void *user_data,
-           const xmlChar *element_name, const xmlChar *prefix, const xmlChar *namespace,
-           int nb_namespaces, const xmlChar **namespaces,
-           int nb_attributes, int nb_defaulted, const xmlChar **attributes)
+    const xmlChar *element_name, const xmlChar *prefix, const xmlChar *namespace,
+    int nb_namespaces, const xmlChar **namespaces,
+    int nb_attributes, int nb_defaulted, const xmlChar **attributes)
 {
   BonjourJabberConversation *bconv = user_data;
-
   xmlnode *node;
   int i;
 
-  if (!bconv || bconv->closing || bconv->close_timeout != 0)
+  if (!bconv || bconv->closing || bconv->close_timeout) return;
+  if (!element_name || nb_attributes > 128 || nb_namespaces > 128) {
+    parser_reject(bconv, "XML attribute limit");
     return;
-
-  g_return_if_fail(element_name != NULL);
-
-  if(!xmlStrcmp(element_name, (xmlChar*) "stream")) {
-    if(!bconv->recv_stream_start) {
-      bconv->recv_stream_start = TRUE;
-
-      /* Always parse and validate the "from" attribute, even if we already have a buddy */
-      if (!parse_from_attrib_and_find_buddy(bconv, nb_attributes, attributes)) {
-        purple_debug_warning("barev", "Rejecting stream without a recognized from identity\n");
-        async_bonjour_jabber_close_conversation(bconv);
-        return;
-      }
-
-      if (!bconv->closing && bconv->close_timeout == 0) {
-        purple_debug_info("barev",
-            "parser: calling stream_started after <stream> — pb=%s sent=%d\n",
-            bconv->pb ? purple_buddy_get_name(bconv->pb) : "(null)",
-            bconv->sent_stream_start);
-        bonjour_jabber_stream_started(bconv);
-      }
-    }
-  } else {
-
-    if (!bconv->current) bconv->stanza_bytes = bconv->stanza_depth = bconv->stanza_nodes = 0;
-    bconv->stanza_bytes += xmlStrlen(element_name) + (namespace ? xmlStrlen(namespace) : 0) + 8;
-    ++bconv->stanza_depth; ++bconv->stanza_nodes;
-    for (i = 0; i < nb_attributes * 5; i += 5)
-      bconv->stanza_bytes += (size_t)(attributes[i+4] - attributes[i+3]) + xmlStrlen(attributes[i]) + 8;
-    for (i = 0; i < nb_namespaces * 2; i += 2)
-      bconv->stanza_bytes += (namespaces[i+1] ? xmlStrlen(namespaces[i+1]) : 0) + 16;
-    if (bconv->stanza_bytes > 524288 || bconv->stanza_depth > 24 || bconv->stanza_nodes > 512 || nb_attributes > 128) {
-      async_bonjour_jabber_close_conversation(bconv);
-      return;
-    }
-
-    /* If we haven't yet attached a buddy and this isn't "<stream:features />",
-     * try to get a "from" attribute as a last resort to match our buddy. */
-    if(bconv->pb == NULL
-        && !(prefix && !xmlStrcmp(prefix, (xmlChar*) "stream")
-          && !xmlStrcmp(element_name, (xmlChar*) "features"))
-        && !parse_from_attrib_and_find_buddy(bconv, nb_attributes, attributes))
-      /* We've run out of options for finding who the conversation is from
-         using explicitly specified stuff; see if we can make a good match
-         by using the IP */
-      bonjour_jabber_conv_match_by_ip(bconv);
-
-    /* If we just matched a buddy for the first time on this stanza (TOFU
-     * succeeded late — stream_started was already called with pb==NULL and
-     * skipped the presence/ping setup), kick off that exchange now. */
-    if (bconv->pb != NULL && bconv->ping_timer == 0 &&
-        bconv->sent_stream_start == STREAM_FULLY_SENT && bconv->recv_stream_start)
-      bonjour_jabber_stream_started(bconv);
-
-    /* Matching can reject this stream and queue destruction.  Do not build a
-     * stanza on a conversation which is already logically dead. */
-    if (bconv->closing || bconv->close_timeout != 0)
-      return;
-
-    if(bconv->current)
-      node = xmlnode_new_child(bconv->current, (const char*) element_name);
-    else
-      node = xmlnode_new((const char*) element_name);
-    xmlnode_set_namespace(node, (const char*) namespace);
-
-    for(i=0; i < nb_attributes * 5; i+=5) {
-      const char *name = (const char *)attributes[i];
-      const char *prefix = (const char *)attributes[i+1];
-      const char *attrib_ns = (const char *)attributes[i+2];
-      char *txt;
-      int attrib_len = attributes[i+4] - attributes[i+3];
-      char *attrib = g_malloc(attrib_len + 1);
-
-      memcpy(attrib, attributes[i+3], attrib_len);
-      attrib[attrib_len] = '\0';
-
-      txt = attrib;
-      attrib = purple_unescape_text(txt);
-      g_free(txt);
-      xmlnode_set_attrib_full(node, name, attrib_ns, prefix, attrib);
-      g_free(attrib);
-    }
-
-    bconv->current = node;
   }
+
+  if (!bconv->recv_stream_start) {
+    char *from, *to, *version, *local;
+    gboolean valid;
+    if (bconv->current || bconv->header_last == '/' || xmlStrcmp(element_name, (const xmlChar *)"stream") ||
+        (bconv->context->encoding && g_ascii_strcasecmp((const char *)bconv->context->encoding, "UTF-8")) ||
+        (bconv->context->version && xmlStrcmp(bconv->context->version, (const xmlChar *)"1.0")) ||
+        !namespace || xmlStrcmp(namespace, (const xmlChar *)STREAM_NS)) {
+      parser_reject(bconv, "expected stream header");
+      return;
+    }
+    from = parser_attribute(nb_attributes, attributes, "from");
+    to = parser_attribute(nb_attributes, attributes, "to");
+    version = parser_attribute(nb_attributes, attributes, "version");
+    local = barev_address_identity(bonjour_jabber_get_local_jid(bconv), FALSE);
+    valid = from && *from && local && parser_address_matches(to, local) &&
+        (!version || !strcmp(version, "1.0"));
+    g_free(local); g_free(to); g_free(version);
+    if (!valid) {
+      g_free(from);
+      parser_reject(bconv, "invalid stream identity, recipient or version");
+      return;
+    }
+
+    /* Keep the outgoing contact attached until the matcher checks its identity. */
+    g_free(bconv->buddy_name);
+    bconv->buddy_name = from;
+    bonjour_jabber_conv_match_by_name(bconv);
+    if (bconv->closing || bconv->close_timeout) return;
+    if (!bconv->pb) {
+      parser_reject(bconv, "unknown stream identity");
+      return;
+    }
+    bconv->recv_stream_start = TRUE;
+    /* SAX starts the root before consuming its final '>' byte. */
+    bconv->frame_end = bconv->header_bytes;
+    ++bconv->input_events;
+    bconv->frame_started = g_get_monotonic_time();
+    bonjour_jabber_stream_started(bconv);
+    return;
+  }
+
+  if (!bconv->current) {
+    char *from = parser_attribute(nb_attributes, attributes, "from");
+    char *to = parser_attribute(nb_attributes, attributes, "to");
+    char *local = barev_address_identity(bonjour_jabber_get_local_jid(bconv), FALSE);
+    gboolean valid = bconv->pb && local &&
+        parser_address_matches(from, bconv->buddy_name) && parser_address_matches(to, local);
+    g_free(from); g_free(to); g_free(local);
+    if (!valid) {
+      parser_reject(bconv, "stanza identity mismatch");
+      return;
+    }
+    if (namespace && !xmlStrcmp(namespace, (const xmlChar *)STREAM_NS) &&
+        !xmlStrcmp(element_name, (const xmlChar *)"stream")) {
+      parser_reject(bconv, "duplicate stream header");
+      return;
+    }
+    bconv->stanza_depth = bconv->stanza_nodes = 0;
+  }
+
+  bconv->stanza_nodes += 1+nb_attributes;
+  if (parser_position(bconv)-bconv->frame_end > STANZA_LIMIT ||
+      ++bconv->stanza_depth > 24 || bconv->stanza_nodes > 512) {
+    parser_reject(bconv, "XML stanza limit");
+    return;
+  }
+  node = bconv->current ? xmlnode_new_child(bconv->current, (const char *)element_name) :
+      xmlnode_new((const char *)element_name);
+  xmlnode_set_namespace(node, (const char *)namespace);
+  for (i = 0; i < nb_attributes * 5; i += 5) {
+    char *escaped = g_strndup((const char *)attributes[i+3], attributes[i+4]-attributes[i+3]);
+    char *value = purple_unescape_text(escaped);
+    xmlnode_set_attrib_full(node, (const char *)attributes[i],
+        (const char *)attributes[i+2], (const char *)attributes[i+1], value);
+    g_free(value); g_free(escaped);
+  }
+  bconv->current = node;
 }
 
 static void
 bonjour_parser_element_end_libxml(void *user_data, const xmlChar *element_name,
-         const xmlChar *prefix, const xmlChar *namespace)
+    const xmlChar *prefix, const xmlChar *namespace)
 {
   BonjourJabberConversation *bconv = user_data;
-
-  if (!bconv || bconv->closing || bconv->close_timeout != 0)
-    return;
-
-  if(!bconv->current) {
-    /* We don't keep a reference to the start stream xmlnode,
-     * so we have to check for it here to close the conversation */
-    if(!xmlStrcmp(element_name, (xmlChar*) "stream"))
-      /* Asynchronously close the conversation to prevent bonjour_parser_setup()
-       * being called from within this context */
-      async_bonjour_jabber_close_conversation(bconv);
+  if (!bconv || bconv->closing || bconv->close_timeout) return;
+  if (!bconv->current) {
+    parser_reject(bconv, "stream closed");
     return;
   }
-
-  if(bconv->current->parent) {
-    if (bconv->stanza_depth) --bconv->stanza_depth;
-    if(!xmlStrcmp((xmlChar*) bconv->current->name, element_name))
-      bconv->current = bconv->current->parent;
+  if (bconv->current->parent) {
+    --bconv->stanza_depth;
+    bconv->current = bconv->current->parent;
   } else {
     xmlnode *packet = bconv->current;
+    const char *ns = xmlnode_get_namespace(packet);
+    guint64 end = parser_position(bconv);
     bconv->current = NULL;
-    bconv->stanza_bytes = bconv->stanza_depth = bconv->stanza_nodes = 0;
-    bonjour_jabber_process_packet(bconv->pb, packet);
+    bconv->stanza_depth = bconv->stanza_nodes = 0;
+    bconv->frame_started = g_get_monotonic_time();
+    if (end-bconv->frame_end > STANZA_LIMIT || ++bconv->input_events > 64) {
+      parser_reject(bconv, "XML frame or input work limit");
+    } else if (ns && !strcmp(ns, STREAM_NS)) {
+      if (!strcmp(packet->name, "error")) parser_reject(bconv, "peer stream error");
+    } else if (ns && !strcmp(ns, CLIENT_NS)) {
+      bonjour_jabber_process_packet(bconv->pb, packet);
+      if (!bconv->closing && !bconv->close_timeout && !strcmp(packet->name, "presence") &&
+          g_strcmp0(xmlnode_get_attrib(packet, "type"), "unavailable") == 0)
+        parser_reject(bconv, "peer unavailable");
+    }
+    bconv->frame_end = end;
     xmlnode_free(packet);
   }
 }
 
 static void
-bonjour_parser_element_text_libxml(void *user_data, const xmlChar *text, int text_len)
+bonjour_parser_element_text_libxml(void *user_data, const xmlChar *text, int length)
 {
   BonjourJabberConversation *bconv = user_data;
-
-  if (!bconv || bconv->closing || bconv->close_timeout != 0 ||
-      !bconv->current)
-    return;
-
-  if(!text || !text_len)
-    return;
-
-  if (text_len < 0 || (size_t)text_len > 524288 - bconv->stanza_bytes) {
-    async_bonjour_jabber_close_conversation(bconv);
+  if (!bconv || bconv->closing || bconv->close_timeout || !text || !length) return;
+  if (!bconv->current) {
+    int i;
+    for (i = 0; i < length; ++i) {
+      if (text[i] != ' ' && text[i] != '\t' && text[i] != '\r' && text[i] != '\n') {
+        parser_reject(bconv, "text outside stanza");
+        break;
+      }
+    }
     return;
   }
-  bconv->stanza_bytes += text_len;
+  if (length < 0 || parser_position(bconv)-bconv->frame_end > STANZA_LIMIT ||
+      ++bconv->stanza_nodes > 512) {
+    parser_reject(bconv, "XML text limit");
+    return;
+  }
+  xmlnode_insert_data(bconv->current, (const char *)text, length);
+}
 
-  xmlnode_insert_data(bconv->current, (const char*) text, text_len);
+static void
+bonjour_parser_subset(void *user_data, const xmlChar *name,
+    const xmlChar *external_id, const xmlChar *system_id)
+{
+  parser_reject(user_data, "DOCTYPE is not allowed");
 }
 
 static void
 bonjour_parser_structured_error_handler(void *user_data, const xmlError *error)
 {
   BonjourJabberConversation *bconv = user_data;
-
-  /* XEP-0054 deliberately defines the legacy namespace "vcard-temp".  It is
-   * not an absolute URI, so modern libxml reports a namespace warning even
-   * though the stanza is valid and remains fully parseable. */
-  if (error && error->code == XML_WAR_NS_URI_RELATIVE && error->message &&
-      strstr(error->message, "vcard-temp") != NULL)
-    return;
-
-  /* defensive check: during conversation teardown, this callback might fire
-   * after bconv has been freed. while the primary fix is ensuring proper
-   * teardown order in jabber.c, this adds extra safety. */
-  if (!bconv) {
-    purple_debug_error("jabber", "XML parser error with NULL conversation context: "
-                                 "Domain %i, code %i, level %i: %s",
-                       error->domain, error->code, error->level,
-                       (error->message ? error->message : "(null)\n"));
-    return;
-  }
-
-  purple_debug_error("jabber", "XML parser error for BonjourJabberConversation %p: "
-                               "Domain %i, code %i, level %i: %s",
-                     bconv,
-                     error->domain, error->code, error->level,
-                     (error->message ? error->message : "(null)\n"));
+  /* XEP-0054 uses the relative namespace vcard-temp. */
+  if (!error || (error->code == XML_WAR_NS_URI_RELATIVE && error->message &&
+      strstr(error->message, "vcard-temp"))) return;
+  purple_debug_warning("barev", "XML parser: %s", error->message ? error->message : "invalid XML\n");
+  if (bconv && error->level >= XML_ERR_ERROR)
+    parser_reject(bconv, "invalid XML");
 }
 
 static xmlSAXHandler bonjour_parser_libxml = {
-  NULL,                  /*internalSubset*/
-  NULL,                  /*isStandalone*/
-  NULL,                  /*hasInternalSubset*/
-  NULL,                  /*hasExternalSubset*/
-  NULL,                  /*resolveEntity*/
-  NULL,                  /*getEntity*/
-  NULL,                  /*entityDecl*/
-  NULL,                  /*notationDecl*/
-  NULL,                  /*attributeDecl*/
-  NULL,                  /*elementDecl*/
-  NULL,                  /*unparsedEntityDecl*/
-  NULL,                  /*setDocumentLocator*/
-  NULL,                  /*startDocument*/
-  NULL,                  /*endDocument*/
-  NULL,                  /*startElement*/
-  NULL,                  /*endElement*/
-  NULL,                  /*reference*/
-  bonjour_parser_element_text_libxml,    /*characters*/
-  NULL,                  /*ignorableWhitespace*/
-  NULL,                  /*processingInstruction*/
-  NULL,                  /*comment*/
-  NULL,                  /*warning*/
-  NULL,                  /*error*/
-  NULL,                  /*fatalError*/
-  NULL,                  /*getParameterEntity*/
-  NULL,                  /*cdataBlock*/
-  NULL,                  /*externalSubset*/
-  XML_SAX2_MAGIC,              /*initialized*/
-  NULL,                  /*_private*/
-  bonjour_parser_element_start_libxml,  /*startElementNs*/
-  bonjour_parser_element_end_libxml,    /*endElementNs*/
-  (xmlStructuredErrorFunc)bonjour_parser_structured_error_handler /*serror*/
+  .internalSubset = bonjour_parser_subset,
+  .externalSubset = bonjour_parser_subset,
+  .characters = bonjour_parser_element_text_libxml,
+  .cdataBlock = bonjour_parser_element_text_libxml,
+  .initialized = XML_SAX2_MAGIC,
+  .startElementNs = bonjour_parser_element_start_libxml,
+  .endElementNs = bonjour_parser_element_end_libxml,
+  .serror = (xmlStructuredErrorFunc)bonjour_parser_structured_error_handler
 };
 
 void
 bonjour_parser_setup(BonjourJabberConversation *bconv)
 {
-
-  /* This seems backwards, but it makes sense. The libxml code creates
-   * the parser context when you try to use it (this way, it can figure
-   * out the encoding at creation time. So, setting up the parser is
-   * just a matter of destroying any current parser. */
-  if (bconv->context) {
-    xmlParseChunk(bconv->context, NULL,0,1);
-    xmlFreeParserCtxt(bconv->context);
-    bconv->context = NULL;
-  }
+  bonjour_parser_destroy(bconv);
+  bconv->recv_stream_start = FALSE;
+  bconv->header_bytes = 0;
+  bconv->header_last = 0;
+  bconv->received_bytes = bconv->frame_end = 0;
+  bconv->stanza_depth = bconv->stanza_nodes = 0;
 }
 
-/* Tear a parser down without feeding it an artificial end-of-file.
- * A Barev/XMPP stream deliberately keeps <stream:stream> open, so finalising
- * an interrupted parser produces a spurious "Premature end of data" error and
- * can run SAX callbacks while the conversation is being destroyed. */
 void
 bonjour_parser_destroy(BonjourJabberConversation *bconv)
 {
   xmlnode *root;
-
-  if (!bconv)
-    return;
-
+  if (!bconv) return;
   if (bconv->context) {
     xmlFreeParserCtxt(bconv->context);
     bconv->context = NULL;
   }
-
   root = bconv->current;
-  while (root && root->parent)
-    root = root->parent;
-
-  if (root)
-    xmlnode_free(root);
-
+  while (root && root->parent) root = root->parent;
+  if (root) xmlnode_free(root);
   bconv->current = NULL;
 }
 
-
-void bonjour_parser_process(BonjourJabberConversation *bconv, const char *buf, int len)
+void
+bonjour_parser_process(BonjourJabberConversation *bconv, const char *buf, int len)
 {
-  gboolean fresh = FALSE;
-
-  if (!bconv || bconv->closing || bconv->close_timeout != 0)
-    return;
-
-  /* Creating a push parser can immediately invoke SAX callbacks too. */
+  int at = 0, result = 0, i;
+  if (!bconv || bconv->closing || bconv->close_timeout) return;
   bconv->in_parser = TRUE;
-  if (bconv->context == NULL) {
-    /* libxml inconsistently starts parsing on creating the
-     * parser, so do a ParseChunk right afterwards to force it. */
-    bconv->context = xmlCreatePushParserCtxt(&bonjour_parser_libxml, bconv, buf, len, NULL);
-    if (bconv->context == NULL) {
-      bconv->in_parser = FALSE;
-      purple_debug_error("barev", "Failed to create XML parser context.\n");
-      return;
+  bconv->input_events = 0;
+  if (!buf || len < 0 || len > 16384) {
+    parser_reject(bconv, "input chunk limit");
+  } else {
+    for (i = 0; i < len; ++i) {
+      if (!buf[i]) {
+        parser_reject(bconv, "UTF-8 XML cannot contain NUL bytes");
+        bconv->in_parser = FALSE;
+        return;
+      }
     }
-    fresh = TRUE;
+    if (!bconv->context)
+      bconv->context = xmlCreatePushParserCtxt(&bonjour_parser_libxml, bconv, NULL, 0, NULL);
+    if (!bconv->context) {
+      parser_reject(bconv, "cannot create XML parser");
+    } else {
+      /* Feed the bounded header separately so stanza bytes in the same read do
+       * not count against its limit, and incomplete headers cannot grow forever. */
+      while (at < len && !bconv->recv_stream_start && !bconv->close_timeout && !bconv->closing) {
+        if (++bconv->header_bytes > HEADER_LIMIT) {
+          parser_reject(bconv, "stream header limit");
+          break;
+        }
+        result = xmlParseChunk(bconv->context, buf+at, 1, 0);
+        ++bconv->received_bytes;
+        bconv->header_last = buf[at++];
+        if (result || !bconv->context->wellFormed) {
+          parser_reject(bconv, "invalid XML");
+          break;
+        }
+      }
+      if (at < len && !bconv->close_timeout && !bconv->closing) {
+        bconv->received_bytes += len-at;
+        result = xmlParseChunk(bconv->context, buf+at, len-at, 0);
+        if (result || !bconv->context->wellFormed) parser_reject(bconv, "invalid XML");
+        if (bconv->received_bytes-bconv->frame_end > STANZA_LIMIT)
+          parser_reject(bconv, "XML frame limit");
+      }
+    }
   }
-
-  /* SAX callbacks below may try to tear the conversation down (e.g. a send
-   * error while answering a ping).  Mark the parser as busy so that the
-   * destructor is deferred instead of freeing the context under libxml. */
-  bconv->in_parser = TRUE;
-
-  if (fresh) {
-    /* force libxml to initialise the just-created context */
-    xmlParseChunk(bconv->context, "", 0, 0);
-  } else if (xmlParseChunk(bconv->context, buf, len, 0) < 0) {
-    /* TODO: What should we do here - I assume we should display an error or something (maybe just print something to the conv?) */
-    purple_debug_error("barev", "Error parsing xml.\n");
-  }
-
   bconv->in_parser = FALSE;
 }
