@@ -137,6 +137,7 @@ SRCS = \
   barev.c \
   identity.c \
   identity-store.c \
+  peer-pins.c \
   buddy.c \
   avatar-cache.c \
   address.c \
@@ -246,6 +247,14 @@ tests/identity-test: $(SOURCE_DIR)/tests/identity-test.c $(SOURCE_DIR)/identity.
 .PHONY: test-identities
 test-identities: tests/identity-test
 	python3 "$(SOURCE_DIR)/tests/check-identities.py" "$(abspath tests/identity-test)"
+
+tests/peer-pins-test: $(SOURCE_DIR)/tests/peer-pins-test.c $(SOURCE_DIR)/peer-pins.c $(SOURCE_DIR)/peer-pins.h $(SOURCE_DIR)/address.c
+	mkdir -p tests
+	$(CC) $(CFLAGS) -I"$(SOURCE_DIR)" "$(SOURCE_DIR)/tests/peer-pins-test.c" "$(SOURCE_DIR)/peer-pins.c" "$(SOURCE_DIR)/address.c" -o "$@" $(LDLIBS)
+
+.PHONY: test-peer-pins
+test-peer-pins: tests/peer-pins-test
+	python3 "$(SOURCE_DIR)/tests/check-peer-pins.py" "$(abspath tests/peer-pins-test)"
 
 install: $(PLUGIN)
 	install -d "$(DESTDIR)$(PLUGIN_DIR)"
