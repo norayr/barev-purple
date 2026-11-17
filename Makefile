@@ -138,6 +138,7 @@ SRCS = \
   identity.c \
   identity-store.c \
   peer-pins.c \
+  pin-ui.c \
   buddy.c \
   avatar-cache.c \
   address.c \

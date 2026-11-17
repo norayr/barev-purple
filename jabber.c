@@ -716,6 +716,7 @@ barev_handle_vcard_iq(xmlnode *packet, PurpleBuddy *pb)
 
                 purple_notify_user_info_add_pair_plaintext(info, "JID", r->who);
                 barev_address_info(info, r->who, purple_buddy_get_protocol_data(pb));
+                barev_peer_pin_info(gc, r->who, info);
                 if (fn && *fn) purple_notify_user_info_add_pair_plaintext(info, "Full Name", fn);
 
                 {

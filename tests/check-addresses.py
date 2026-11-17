@@ -110,10 +110,18 @@ for name in ["bob@a-e.barev.v6.alt", "bob@a-a.barev.v6.alt", "bob@72-e.barev.v6.
     plugin.g_free(pointer)
 print(f"Barev C codec checks passed: {checks}", flush=True)
 
-with tempfile.TemporaryDirectory(prefix="barev-address-", dir=Path(sys.argv[1]).resolve().parent) as profile:
-    environment = dict(os.environ, HOME=profile, XDG_CONFIG_HOME=profile,
-                       XDG_CACHE_HOME=profile, XDG_DATA_HOME=profile,
-                       G_DEBUG="fatal-criticals", GST_PLUGIN_SYSTEM_PATH_1_0="",
-                       GST_PLUGIN_PATH_1_0="", GST_REGISTRY_1_0=os.path.join(profile, "gst.bin"))
-    environment.pop("DBUS_SESSION_BUS_ADDRESS", None)
-    subprocess.run([sys.argv[1], profile, sys.argv[2]], check=True, timeout=30, env=environment)
+for haze in (False, True):
+    with tempfile.TemporaryDirectory(prefix="barev-address-", dir=Path(sys.argv[1]).resolve().parent) as profile:
+        environment = dict(os.environ, HOME=profile, XDG_CONFIG_HOME=profile,
+                           XDG_CACHE_HOME=profile, XDG_DATA_HOME=profile,
+                           G_DEBUG="fatal-criticals", GST_PLUGIN_SYSTEM_PATH_1_0="",
+                           GST_PLUGIN_PATH_1_0="", GST_REGISTRY_1_0=os.path.join(profile, "gst.bin"))
+        environment.pop("DBUS_SESSION_BUS_ADDRESS", None)
+        active = Path(profile)/"transient" if haze else Path(profile)
+        active.mkdir(exist_ok=True)
+        subprocess.run([sys.argv[1], str(active), sys.argv[2], *(["--haze"] if haze else [])],
+                       check=True, timeout=30, env=environment)
+        stored = Path(profile)/".purple" if haze else active
+        assert len(list((stored/"barev").glob("peer-*.pin"))) == 1
+        if haze:
+            assert not (active/"barev").exists()

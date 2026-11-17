@@ -49,6 +49,7 @@
 #include "bonjour_ft.h"
 
 #include <request.h> //for purple_request_fields
+#include "peer-pins.h"
 #include <blist.h> // for barev
 #include <eventloop.h>
 #include "libpurple/server.h" //for typing notifications
@@ -814,6 +815,96 @@ barev_account_actions(PurplePlugin *plugin, gpointer context)
     return g_list_append(NULL, purple_plugin_action_new(_("My Barev address"), barev_my_address));
 }
 
+static char *pin_buddy_address(PurpleBuddy *buddy)
+{
+    BonjourBuddy *bb = purple_buddy_get_protocol_data(buddy);
+    const char *who = purple_buddy_get_name(buddy);
+    char *full = NULL, *canonical;
+    if (!strchr(who, '@') && bb && bb->ips && bb->ips->data)
+        full = g_strdup_printf("%s@%s", who, (char *)bb->ips->data);
+    canonical = barev_address_identity(full ? full : who, FALSE);
+    g_free(full); return canonical;
+}
+
+static char *pin_contact(PurpleAccount *account, const char *who)
+{
+    GSList *buddies = purple_find_buddies(account, NULL), *item;
+    char *result = NULL;
+    for (item = buddies; item; item = item->next) {
+        PurpleBuddy *buddy = item->data;
+        char *canonical = pin_buddy_address(buddy);
+        if (canonical && (!strcmp(who, canonical) || !strcmp(who, purple_buddy_get_name(buddy)))) {
+            result = canonical; break;
+        }
+        g_free(canonical);
+    }
+    g_slist_free(buddies); return result;
+}
+
+static char *pin_profile(void)
+{
+    const char *ui = purple_core_get_ui();
+    return ui && strstr(ui, "haze") ? g_build_filename(g_get_home_dir(), ".purple", NULL) : g_strdup(purple_user_dir());
+}
+
+static int pin_load(gpointer owner, const char *who, char key[65], char fingerprint[72])
+{
+    PurpleAccount *account = owner;
+    PurpleConnection *gc = purple_account_get_connection(account);
+    BonjourData *bd = gc ? purple_connection_get_protocol_data(gc) : NULL;
+    char own[65], *canonical, *profile;
+    int status;
+    if (!bd || !barev_identity_identifier(&bd->identity, own)) return BAREV_PIN_STORAGE;
+    canonical = pin_contact(account, who);
+    if (!canonical) return BAREV_PIN_INVALID;
+    profile = pin_profile(); status = barev_pin_load(profile, own, canonical, key, fingerprint);
+    g_free(profile); g_free(canonical); return status;
+}
+static gboolean pin_describe(gpointer owner, const char *text, char key[65], char fingerprint[72])
+{ (void)owner; return barev_pin_describe(text, key, fingerprint); }
+static int pin_save(gpointer owner, const char *who, const char *expected, const char *replacement)
+{
+    PurpleAccount *account = owner;
+    PurpleConnection *gc = purple_account_get_connection(account);
+    BonjourData *bd = gc ? purple_connection_get_protocol_data(gc) : NULL;
+    char own[65], *canonical, *profile;
+    int status;
+    if (!bd || !barev_identity_identifier(&bd->identity, own)) return BAREV_PIN_STORAGE;
+    canonical = pin_contact(account, who);
+    if (!canonical) return BAREV_PIN_INVALID;
+    profile = pin_profile(); status = barev_pin_save(profile, own, canonical, expected, replacement);
+    g_free(profile); g_free(canonical); return status;
+}
+static BarevPinUI *pin_ui(PurpleConnection *gc)
+{
+    BonjourData *bd = gc ? purple_connection_get_protocol_data(gc) : NULL;
+    if (!bd) return NULL;
+    if (!bd->pins) {
+        BarevPinBackend backend = {purple_connection_get_account(gc), pin_load, pin_describe, pin_save};
+        bd->pins = BarevPinUI_New(purple_connection_get_account(gc), &backend);
+    }
+    return bd->pins;
+}
+void barev_peer_pin_info(PurpleConnection *gc, const char *who, PurpleNotifyUserInfo *info)
+{ BarevPinUI_Info(pin_ui(gc), who, info); }
+static void peer_identity(PurpleBlistNode *node, gpointer data)
+{
+    PurpleBuddy *buddy = (PurpleBuddy *)node;
+    PurpleConnection *gc;
+    char *canonical;
+    (void)data;
+    if (!PURPLE_BLIST_NODE_IS_BUDDY(node)) return;
+    gc = purple_account_get_connection(purple_buddy_get_account(buddy));
+    canonical = pin_buddy_address(buddy);
+    BarevPinUI_Open(pin_ui(gc), canonical ? canonical : purple_buddy_get_name(buddy));
+    g_free(canonical);
+}
+static GList *buddy_menu(PurpleBlistNode *node)
+{
+    if (!PURPLE_BLIST_NODE_IS_BUDDY(node)) return NULL;
+    return g_list_append(NULL, purple_menu_action_new(_("Peer identity..."), (PurpleCallback)peer_identity, NULL, NULL));
+}
+
 static void
 barev_save_ip_to_account(PurpleAccount *account, const char *name,
                           const char *ip, int port)
@@ -1138,6 +1229,10 @@ bonjour_close(PurpleConnection *connection)
 {
   BonjourData *bd = connection->proto_data;
   PurpleAccount *account = purple_connection_get_account(connection);
+
+  if (bd && bd->pins) {
+    BarevPinUI *pins = bd->pins; bd->pins = NULL; BarevPinUI_Close(pins);
+  }
 
   if (bd && bd->images) {
     BarevImages *images = bd->images; bd->images = NULL; barev_images_close(images);
@@ -1633,7 +1728,7 @@ static PurplePluginProtocolInfo prpl_info =
   bonjour_status_text,                                     /* status_text */
   bonjour_tooltip_text,                                    /* tooltip_text */
   bonjour_status_types,                                    /* status_types */
-  NULL,                                                    /* blist_node_menu */
+  buddy_menu,                                              /* blist_node_menu */
   NULL,                                                    /* chat_info */
   NULL,                                                    /* chat_info_defaults */
   bonjour_login,                                           /* login */
@@ -1952,6 +2047,7 @@ bonjour_get_info(PurpleConnection *gc, const char *who)
     info = purple_notify_user_info_new();
     purple_notify_user_info_add_pair_plaintext(info, "JID", who);
     barev_address_info(info, who, bb);
+    barev_peer_pin_info(gc, who, info);
 
     if (bb) {
         if (bb->status)

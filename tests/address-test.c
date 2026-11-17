@@ -8,6 +8,7 @@
 #include <libpurple/eventloop.h>
 #include <libpurple/notify.h>
 #include <libpurple/plugin.h>
+#include <libpurple/request.h>
 #include <libpurple/util.h>
 #include "barev.h"
 
@@ -15,6 +16,11 @@ static unsigned checks, starts, popups;
 static char *shown_ipv6, *shown_address, *shown_public_key, *shown_fingerprint, *shown_authentication;
 static unsigned errors;
 static char *last_error;
+static char *shown_peer_key, *shown_pin_status, *pin_description;
+static PurpleRequestInputCb pin_input;
+static PurpleRequestActionCb pin_choices[2];
+static gpointer pin_input_data, pin_action_data;
+static int pin_input_handle, pin_action_handle;
 #define CHECK(value) do { ++checks; if (!(value)) g_error("address check %u failed", checks); } while (0)
 
 /* Stop login before any listener or peer connection is opened. */
@@ -45,6 +51,7 @@ static void *show_info(PurpleConnection *gc, const char *who, PurpleNotifyUserIn
     (void)gc; (void)who;
     g_free(shown_ipv6); g_free(shown_address);
     g_free(shown_public_key); g_free(shown_fingerprint); g_free(shown_authentication);
+    g_free(shown_peer_key); g_free(shown_pin_status); shown_peer_key = shown_pin_status = NULL;
     shown_ipv6 = shown_address = NULL;
     shown_public_key = shown_fingerprint = shown_authentication = NULL;
     for (item = purple_notify_user_info_get_entries(info); item; item = item->next) {
@@ -55,9 +62,48 @@ static void *show_info(PurpleConnection *gc, const char *who, PurpleNotifyUserIn
         if (!g_strcmp0(label, "Ed25519 public key")) shown_public_key = g_strdup(value);
         if (!g_strcmp0(label, "Identity fingerprint")) shown_fingerprint = g_strdup(value);
         if (!g_strcmp0(label, "Chat authentication")) shown_authentication = g_strdup(value);
+        if (!g_strcmp0(label, "Pinned Ed25519 public key")) shown_peer_key = g_strdup(value);
+        if (!g_strcmp0(label, "Peer key pin")) shown_pin_status = g_strdup(value);
     }
     ++popups;
     return NULL;
+}
+
+static void *request_pin_input(const char *title, const char *primary, const char *secondary,
+    const char *value, gboolean multiline, gboolean masked, gchar *hint, const char *ok, GCallback yes,
+    const char *cancel, GCallback no, PurpleAccount *purple, const char *who,
+    PurpleConversation *conversation, void *data)
+{
+    (void)title; (void)primary; (void)secondary; (void)value; (void)multiline; (void)masked; (void)hint;
+    (void)ok; (void)cancel; (void)no; (void)purple; (void)who; (void)conversation;
+    pin_input = (PurpleRequestInputCb)yes; pin_input_data = data; return &pin_input_handle;
+}
+static void *request_pin_action(const char *title, const char *primary, const char *secondary,
+    int selected, PurpleAccount *purple, const char *who, PurpleConversation *conversation,
+    void *data, size_t count, va_list choices)
+{
+    unsigned i;
+    (void)title; (void)primary; (void)purple; (void)who; (void)conversation;
+    CHECK(count == 2 && selected == 0); pin_action_data = data;
+    g_free(pin_description); pin_description = g_strdup(secondary);
+    for (i = 0; i < 2; ++i) { (void)va_arg(choices, const char *); pin_choices[i] = va_arg(choices, PurpleRequestActionCb); }
+    return &pin_action_handle;
+}
+static void close_pin_request(PurpleRequestType type, void *handle)
+{
+    (void)handle;
+    if (type == PURPLE_REQUEST_INPUT) pin_input_data = NULL;
+    if (type == PURPLE_REQUEST_ACTION) pin_action_data = NULL;
+}
+static void enter_pin(const char *key)
+{
+    PurpleRequestInputCb cb = pin_input; gpointer data = pin_input_data;
+    CHECK(data != NULL); purple_request_close(PURPLE_REQUEST_INPUT, &pin_input_handle); cb(data, key);
+}
+static void approve_pin(unsigned choice)
+{
+    PurpleRequestActionCb cb = pin_choices[choice]; gpointer data = pin_action_data;
+    CHECK(data != NULL); purple_request_close(PURPLE_REQUEST_ACTION, &pin_action_handle); cb(data, 1-(int)choice);
 }
 
 int main(int argc, char **argv)
@@ -65,6 +111,7 @@ int main(int argc, char **argv)
     PurpleEventLoopUiOps events = {.timeout_add = g_timeout_add, .timeout_remove = g_source_remove,
                                    .timeout_add_seconds = g_timeout_add_seconds};
     PurpleNotifyUiOps notify = {.notify_message = show_message, .notify_userinfo = show_info};
+    PurpleRequestUiOps requests = {.request_input = request_pin_input, .request_action = request_pin_action, .close_request = close_pin_request};
     PurpleAccount *account;
     PurpleConnection *gc;
     PurplePlugin *plugin;
@@ -74,15 +121,17 @@ int main(int argc, char **argv)
     BonjourData *data;
     GList *actions;
     PurplePluginAction *action;
-    char *path, *saved = NULL;
+    char *path, *saved = NULL, *store_profile;
     GModule *module;
     void (*load_buddies)(PurpleAccount *);
     gpointer symbol;
-    if (argc != 3) return 2;
+    if (argc != 3 && argc != 4) return 2;
     purple_util_set_user_dir(argv[1]);
     purple_eventloop_set_ui_ops(&events);
     purple_notify_set_ui_ops(&notify);
-    CHECK(purple_core_init("barev-address-test"));
+    purple_request_set_ui_ops(&requests);
+    CHECK(purple_core_init(argc == 4 ? "telepathy-haze" : "barev-address-test"));
+    store_profile = argc == 4 ? g_build_filename(g_get_home_dir(), ".purple", NULL) : g_strdup(argv[1]);
     purple_set_blist(purple_blist_new());
     plugin = purple_plugins_find_with_id("prpl-barev");
     if (plugin) purple_plugin_destroy(plugin);
@@ -102,7 +151,7 @@ int main(int argc, char **argv)
         char *filename = g_strdup_printf("%s.key", identifier), *record = NULL;
         gsize length = 0;
         CHECK(strlen(identifier) == 64);
-        path = g_build_filename(argv[1], "barev", "identities", filename, NULL);
+        path = g_build_filename(store_profile, "barev", "identities", filename, NULL);
         CHECK(g_file_get_contents(path, &record, &length, NULL) && length == 72);
         memcpy(data->identity.seed, record+8, 32); memcpy(data->identity.public_key, record+40, 32);
         data->identity.active = TRUE;
@@ -141,6 +190,29 @@ int main(int argc, char **argv)
     path = g_build_filename(g_get_home_dir(), ".purple", "barev-contacts-fixture.conf", NULL);
     CHECK(g_file_get_contents(path, &saved, NULL, NULL));
     CHECK(!strcmp(saved, "Bob@200::1\n")); g_free(saved); g_free(path);
+
+    {
+        const char *key = "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c";
+        const char *replacement = "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025";
+        GList *menu = protocol->blist_node_menu(PURPLE_BLIST_NODE(buddy));
+        PurpleMenuAction *item = menu ? menu->data : NULL;
+        unsigned count = buddy_count(account);
+        CHECK(item && !strcmp(item->label, "Peer identity..."));
+        CHECK(!g_strcmp0(shown_pin_status, NULL));
+        ((void (*)(PurpleBlistNode *, gpointer))item->callback)(PURPLE_BLIST_NODE(buddy), item->data); enter_pin(key); approve_pin(0);
+        protocol->get_info(gc, purple_buddy_get_name(buddy));
+        CHECK(!shown_peer_key && !g_strcmp0(shown_pin_status, "No pinned key"));
+        ((void (*)(PurpleBlistNode *, gpointer))item->callback)(PURPLE_BLIST_NODE(buddy), item->data); enter_pin(key);
+        CHECK(pin_description && strstr(pin_description, "New fingerprint: SHA256:") && strstr(pin_description, key));
+        approve_pin(1); protocol->get_info(gc, purple_buddy_get_name(buddy));
+        CHECK(!g_strcmp0(shown_peer_key, key) && !g_strcmp0(shown_pin_status, "Manually pinned"));
+        CHECK(buddy_count(account) == count && shown_authentication && strstr(shown_authentication, "not yet negotiated"));
+        ((void (*)(PurpleBlistNode *, gpointer))item->callback)(PURPLE_BLIST_NODE(buddy), item->data); enter_pin(replacement);
+        CHECK(strstr(pin_description, "Current fingerprint: SHA256:") && strstr(pin_description, replacement));
+        approve_pin(1); protocol->get_info(gc, purple_buddy_get_name(buddy));
+        CHECK(!g_strcmp0(shown_peer_key, replacement));
+        purple_menu_action_free(item); g_list_free(menu);
+    }
 
     /* Exercise actual message serialization over a private Unix socket pair. */
     {
@@ -226,6 +298,8 @@ int main(int argc, char **argv)
     CHECK(purple_account_is_disconnected(account));
     g_free(shown_ipv6); g_free(shown_address); g_free(last_error);
     g_free(shown_public_key); g_free(shown_fingerprint); g_free(shown_authentication);
+    g_free(shown_peer_key); g_free(shown_pin_status); g_free(pin_description);
+    g_free(store_profile);
     purple_core_quit();
     g_print("Barev C address UI and persistence checks passed: %u\n", checks);
     return 0;

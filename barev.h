@@ -32,6 +32,7 @@
 #include <notify.h>
 #include "images.h"
 #include "identity.h"
+#include "pin-ui.h"
 
 #define BONJOUR_GROUP_NAME _("Barev")
 #define BONJOUR_PROTOCOL_NAME "barev"
@@ -55,6 +56,7 @@ typedef struct _BonjourData
   guint reconnect_timer; // barev reconnect timer
   BarevImages *images;
   BarevIdentity identity;
+  BarevPinUI *pins;
 } BonjourData;
 
 /**
@@ -64,5 +66,6 @@ const char *bonjour_get_jid(PurpleAccount *account);
 void barev_save_persistent_contacts(PurpleAccount *account);
 gboolean barev_prepare_buddy(PurpleBuddy *buddy);
 void barev_address_info(PurpleNotifyUserInfo *info, const char *who, BonjourBuddy *buddy);
+void barev_peer_pin_info(PurpleConnection *gc, const char *who, PurpleNotifyUserInfo *info);
 
 #endif /* _BONJOUR_H_ */
