@@ -57,6 +57,8 @@ LIBXML_CFLAGS  := -I$(W32_XML_INC)
 LIBXML_LIBS    := -L$(W32_LIBDIR) -lxml2
 IMAGE_CFLAGS   := -I$(W32_GTK_DIR)/include/gdk-pixbuf-2.0
 IMAGE_LIBS     := -L$(W32_GTK_DIR)/lib -lgdk_pixbuf-2.0
+CRYPTO_CFLAGS  ?= -I$(W32_PURPLE_INC)
+CRYPTO_LIBS    ?= -L$(W32_LIBDIR) -lcrypto
 else
 PURPLE_CFLAGS  := $(shell pkg-config --cflags purple) $(PURPLE_ADDITIONAL)
 PURPLE_LIBS    := $(shell pkg-config --libs purple)
@@ -68,6 +70,8 @@ LIBXML_CFLAGS  := $(shell pkg-config --cflags libxml-2.0)
 LIBXML_LIBS    := $(shell pkg-config --libs libxml-2.0)
 IMAGE_CFLAGS   := $(shell pkg-config --cflags gdk-pixbuf-2.0)
 IMAGE_LIBS     := $(shell pkg-config --libs gdk-pixbuf-2.0)
+CRYPTO_CFLAGS  := $(shell pkg-config --cflags libcrypto)
+CRYPTO_LIBS    := $(shell pkg-config --libs libcrypto)
 endif
 
 # Optional GStreamer / voice-video support.
@@ -113,8 +117,8 @@ CFLAGS += $(WARN) $(PICFLAG) \
           $(PURPLE_CFLAGS) $(GLIB_CFLAGS) $(LIBXML_CFLAGS) $(AVAHI_CFLAGS) \
           -DBAREV_BUILD_ID=\"$(BAREV_BUILD_ID)\"
 
-CFLAGS += $(IMAGE_CFLAGS)
-LDLIBS  = $(PURPLE_LIBS) $(GLIB_LIBS) $(LIBXML_LIBS) $(AVAHI_LIBS) $(LDLIBS_EXTRA) $(WIN_LIBS) $(IMAGE_LIBS)
+CFLAGS += $(IMAGE_CFLAGS) $(CRYPTO_CFLAGS)
+LDLIBS  = $(PURPLE_LIBS) $(GLIB_LIBS) $(LIBXML_LIBS) $(AVAHI_LIBS) $(LDLIBS_EXTRA) $(WIN_LIBS) $(IMAGE_LIBS) $(CRYPTO_LIBS)
 
 PLUGIN  = libbarev.$(EXT)
 
@@ -131,6 +135,8 @@ endif
 
 SRCS = \
   barev.c \
+  identity.c \
+  identity-store.c \
   buddy.c \
   avatar-cache.c \
   address.c \
@@ -232,6 +238,14 @@ test-images: $(PLUGIN) tests/image-ui-test tests/image-wire-test
 	python3 "$(SOURCE_DIR)/tests/check-images.py" "$(CURDIR)/tests/image-ui-test" "$(abspath $(PLUGIN))"
 	"$(CURDIR)/tests/image-wire-test"
 FORCE:
+
+tests/identity-test: $(SOURCE_DIR)/tests/identity-test.c $(SOURCE_DIR)/identity.c $(SOURCE_DIR)/identity.h $(SOURCE_DIR)/identity-store.c $(SOURCE_DIR)/identity-store.h
+	mkdir -p tests
+	$(CC) $(CFLAGS) -I"$(SOURCE_DIR)" "$(SOURCE_DIR)/tests/identity-test.c" "$(SOURCE_DIR)/identity.c" "$(SOURCE_DIR)/identity-store.c" -o "$@" $(GLIB_LIBS) $(CRYPTO_LIBS)
+
+.PHONY: test-identities
+test-identities: tests/identity-test
+	python3 "$(SOURCE_DIR)/tests/check-identities.py" "$(abspath tests/identity-test)"
 
 install: $(PLUGIN)
 	install -d "$(DESTDIR)$(PLUGIN_DIR)"
