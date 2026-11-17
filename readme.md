@@ -23,13 +23,13 @@ support.
 
 ## Dependencies
 
-On Gentoo: net-im/pidgin, dev-libs/libxml2
+On Gentoo: net-im/pidgin, dev-libs/libxml2, dev-libs/openssl (1.1.1 or newer)
 
 On Debian and derivatives, install the build dependencies with:
 
 ```sh
 sudo apt install build-essential pkg-config libpurple-dev libglib2.0-dev \
-  libxml2-dev libgstreamer1.0-dev libfarstream-0.2-dev
+  libxml2-dev libssl-dev libgstreamer1.0-dev libfarstream-0.2-dev
 ```
 
 For voice/video at runtime, the usual GStreamer plugins are recommended:
@@ -118,6 +118,9 @@ Currently, if you want to change your contact's port, you need to
 * avatars (XEP-0153), with advertised SHA-1 comparison and persistent libpurple
   cache reuse. See [avatar exchange and caching](barev.md#4-avatars-xep-0153).
 * Chat State Notification (XEP-0085) - a bit of composing events.
+* Persistent local Ed25519 keys and fingerprint display in **My Barev address**.
+  See [account identities and backups](identity.md); chat identity authentication
+  is a separate protocol step.
 * Jingle RTP audio/video calls when built with `USE_VV=1`.
 
 # What does not work

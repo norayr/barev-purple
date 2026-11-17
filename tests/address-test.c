@@ -12,7 +12,7 @@
 #include "barev.h"
 
 static unsigned checks, starts, popups;
-static char *shown_ipv6, *shown_address;
+static char *shown_ipv6, *shown_address, *shown_public_key, *shown_fingerprint, *shown_authentication;
 static unsigned errors;
 static char *last_error;
 #define CHECK(value) do { ++checks; if (!(value)) g_error("address check %u failed", checks); } while (0)
@@ -44,12 +44,17 @@ static void *show_info(PurpleConnection *gc, const char *who, PurpleNotifyUserIn
     GList *item;
     (void)gc; (void)who;
     g_free(shown_ipv6); g_free(shown_address);
+    g_free(shown_public_key); g_free(shown_fingerprint); g_free(shown_authentication);
     shown_ipv6 = shown_address = NULL;
+    shown_public_key = shown_fingerprint = shown_authentication = NULL;
     for (item = purple_notify_user_info_get_entries(info); item; item = item->next) {
         const char *label = purple_notify_user_info_entry_get_label(item->data);
         const char *value = purple_notify_user_info_entry_get_value(item->data);
         if (!g_strcmp0(label, "IPv6")) shown_ipv6 = g_strdup(value);
         if (!g_strcmp0(label, "Barev address")) shown_address = g_strdup(value);
+        if (!g_strcmp0(label, "Ed25519 public key")) shown_public_key = g_strdup(value);
+        if (!g_strcmp0(label, "Identity fingerprint")) shown_fingerprint = g_strdup(value);
+        if (!g_strcmp0(label, "Chat authentication")) shown_authentication = g_strdup(value);
     }
     ++popups;
     return NULL;
@@ -92,6 +97,17 @@ int main(int argc, char **argv)
     gc = purple_account_get_connection(account);
     CHECK(gc && !purple_connection_get_protocol_data(gc));
     data = g_new0(BonjourData, 1);
+    {
+        const char *identifier = purple_account_get_string(account, "barev_identity", "");
+        char *filename = g_strdup_printf("%s.key", identifier), *record = NULL;
+        gsize length = 0;
+        CHECK(strlen(identifier) == 64);
+        path = g_build_filename(argv[1], "barev", "identities", filename, NULL);
+        CHECK(g_file_get_contents(path, &record, &length, NULL) && length == 72);
+        memcpy(data->identity.seed, record+8, 32); memcpy(data->identity.public_key, record+40, 32);
+        data->identity.active = TRUE;
+        g_free(record); g_free(filename); g_free(path);
+    }
     data->jid = g_strdup("fixture@200::1");
     purple_connection_set_protocol_data(gc, data);
     path = g_build_filename(g_get_home_dir(), ".purple", NULL);
@@ -118,6 +134,9 @@ int main(int argc, char **argv)
     action->context = gc; action->plugin = plugin;
     action->callback(action);
     CHECK(popups == 2 && !g_strcmp0(shown_address, "fixture@ai-e.barev.v6.alt"));
+    CHECK(!g_strcmp0(shown_public_key, purple_account_get_string(account, "barev_identity", "")));
+    CHECK(shown_fingerprint && strlen(shown_fingerprint) == 71 && g_str_has_prefix(shown_fingerprint, "SHA256:"));
+    CHECK(shown_authentication && strstr(shown_authentication, "not yet negotiated"));
     purple_plugin_action_free(action); g_list_free(actions);
     path = g_build_filename(g_get_home_dir(), ".purple", "barev-contacts-fixture.conf", NULL);
     CHECK(g_file_get_contents(path, &saved, NULL, NULL));
@@ -206,6 +225,7 @@ int main(int argc, char **argv)
     purple_account_disconnect(account);
     CHECK(purple_account_is_disconnected(account));
     g_free(shown_ipv6); g_free(shown_address); g_free(last_error);
+    g_free(shown_public_key); g_free(shown_fingerprint); g_free(shown_authentication);
     purple_core_quit();
     g_print("Barev C address UI and persistence checks passed: %u\n", checks);
     return 0;

@@ -790,6 +790,19 @@ barev_my_address(PurplePluginAction *action)
     info = purple_notify_user_info_new();
     purple_notify_user_info_add_pair_plaintext(info, "JID", bd->jid);
     barev_address_info(info, bd->jid, NULL);
+    {
+        char identifier[65], fingerprint[72];
+        if (barev_identity_identifier(&bd->identity, identifier) &&
+            barev_identity_fingerprint(&bd->identity, fingerprint)) {
+            purple_notify_user_info_add_pair_plaintext(info, _("Ed25519 public key"), identifier);
+            purple_notify_user_info_add_pair_plaintext(info, _("Identity fingerprint"), fingerprint);
+            purple_notify_user_info_add_pair_plaintext(info, _("Chat authentication"),
+                _("Identity authentication is not yet negotiated on chat connections."));
+        } else {
+            purple_notify_user_info_add_pair_plaintext(info, _("Local identity"),
+                _("Protected identity storage is unavailable on this platform."));
+        }
+    }
     purple_notify_userinfo(gc, bd->jid, info, NULL, NULL);
     purple_notify_user_info_destroy(info);
 }
@@ -984,6 +997,30 @@ bonjour_login_barev(PurpleAccount *account)
   if (!accname || !*accname)
       accname = "barev";
 
+  {
+      const char *ui = purple_core_get_ui();
+      /* Haze can discard its active libpurple profile between sessions. */
+      gchar *profile = ui && strstr(ui, "haze")
+          ? g_build_filename(g_get_home_dir(), ".purple", NULL) : g_strdup(purple_user_dir());
+      char identifier[65];
+      const char *expected = purple_account_get_string(account, "barev_identity", "");
+      int result = barev_identity_open(profile, accname,
+          expected, &bd->identity);
+      g_free(profile);
+      if (result == BAREV_IDENTITY_UNSUPPORTED && !*expected) {
+          purple_debug_warning("barev", "Protected identity storage is unavailable; retaining the existing unauthenticated chat transport.\n");
+      } else if (result || !barev_identity_identifier(&bd->identity, identifier)) {
+          purple_debug_error("barev", "Identity initialization failed (code %d).\n", result);
+          purple_connection_set_protocol_data(gc, NULL);
+          barev_identity_clear(&bd->identity); g_free(bd);
+          purple_connection_error_reason(gc, PURPLE_CONNECTION_ERROR_INVALID_SETTINGS,
+              _("Cannot load the Barev identity. Check the profile's barev directory, private permissions and account identity setting. Restore missing keys from backup; do not delete the identity to fix a login error."));
+          return;
+      } else {
+          purple_account_set_string(account, "barev_identity", identifier);
+      }
+  }
+
   /* Prefer a local IPv6 (e.g. Yggdrasil) as our domain */
   GSList *ips = bonjour_jabber_get_local_ips(-1);
   const char *self_ip = ips ? (const char *)ips->data : NULL;
@@ -1018,6 +1055,7 @@ bonjour_login_barev(PurpleAccount *account)
     purple_connection_set_protocol_data(gc, NULL);
     g_free(bd->jabber_data);
     g_free(bd->jid);
+    barev_identity_clear(&bd->identity);
     g_free(bd);
     return;
   }
@@ -1165,6 +1203,7 @@ bonjour_close(PurpleConnection *connection)
   }
 
   connection->proto_data = NULL;
+  if (bd) barev_identity_clear(&bd->identity);
   g_free(bd);
 }
 
