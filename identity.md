@@ -10,6 +10,7 @@ Pidgin stores identities inside its libpurple profile, normally:
 ~/.purple/barev/
   identities/<public-key>.key
   accounts/<account-hash>.identity
+  peer-<pin-hash>.pin
 ```
 
 Custom Pidgin profile directories are honored. Telepathy-Haze uses
@@ -22,6 +23,29 @@ The public identifier is also saved as the `barev_identity` account setting in
 temporary profiles. Renaming an account preserves its configured public key;
 an existing link to a different identity is an error. Old links and keys are
 retained when accounts are renamed or removed.
+
+## Pinning a contact's key
+
+Open **Peer identity...** from an existing contact's menu. Paste the contact's
+64 hexadecimal Ed25519 public-key digits from **My Barev address**, then compare
+the displayed SHA-256 fingerprint through an independent trusted channel.
+Approval saves that public key. Contact information shows the saved key,
+fingerprint and **Manually pinned** status.
+
+Changing a pin requires another explicit approval displaying both the old and
+new fingerprints. Canceling preserves the existing pin. An unreadable or corrupt
+record is an error; restore it from backup before proceeding. If the saved key
+changes while the dialog is open, reopen the dialog and compare again.
+
+Pins are scoped to the local public identity and the contact's canonical
+`nickname@IPv6` address. Numeric and encoded IPv6 spellings resolve to the same
+record; nickname case remains significant. A different peer address or local
+identity has a separate pin. Removing a contact retains its pin independently
+of `blist.xml`; saving a pin does not add a contact to the manual allowlist.
+
+Peer-pin files contain public data and use ordinary file APIs inside the private
+`barev` directory. Use one active client per persistent profile. Keep that
+directory private and include pin files in profile backups.
 
 ## Backup and recovery
 
@@ -50,23 +74,32 @@ All records are binary and must have exactly the stated length:
 | --- | --- |
 | Identity key | ASCII `BAREVID1` (8), seed (32), public key (32): 72 bytes. |
 | Account link | ASCII `BAREVAC1` (8), public key (32): 40 bytes. |
+| Peer pin | ASCII `BAREVPN1` (8), local public key (32), pin hash (32), peer public key (32): 104 bytes. |
 
 The key filename uses the 64 lowercase hexadecimal public-key digits. The
 account hash is SHA-256 of the ASCII bytes `Barev account v1\n`, followed by
 the exact UTF-8 account nickname, with no terminating NUL. The link filename
 uses its 64 lowercase hexadecimal digits.
 
-Loading derives the public key from the seed and checks both the stored key
-and filename. New records are synchronized and installed atomically without
-overwriting an existing file. A nonblocking directory lock serializes local
-initialization; a busy profile can be retried after the other client finishes.
+The pin hash is SHA-256 of the ASCII bytes `Barev peer pin v1\n`, followed by
+the raw 32-byte local public key and the UTF-8 canonical `nickname@IPv6` address,
+without a terminating NUL. Pin filenames use its 64 lowercase hexadecimal digits.
+Loading checks the record header, length, local public key and pin hash.
+
+Loading an identity derives the public key from the seed and checks both the
+stored key and filename. New identity and account-link records are synchronized
+and installed atomically without overwriting an existing file. A nonblocking
+directory lock serializes local identity initialization; a busy profile can be
+retried after the other client finishes.
 
 ## Implementation and authentication
 
 The Oberon plugin uses VOC's native Ed25519 and SHA implementations. The C
-plugin uses OpenSSL libcrypto 1.1.1 or newer. Private file operations are kept
-in a dedicated native filesystem boundary. The current storage boundary is
-implemented for Unix-like systems and tested on Linux. Windows accounts without
+plugin uses OpenSSL libcrypto 1.1.1 or newer. Peer-pin persistence in the Oberon
+plugin uses VOC's `oocFiles` byte channels and temporary-file registration.
+Private identity-file operations are kept in a dedicated native filesystem
+boundary. The current storage boundary is implemented for Unix-like systems and
+tested on Linux. Windows accounts without
 a configured identity retain their existing chat behavior, with identity storage
 shown as unavailable. A configured identity cannot be bypassed on Windows; its
 login fails until protected Windows storage is available.
@@ -74,9 +107,9 @@ login fails until protected Windows storage is available.
 Persistent local keys provide the foundation for peer authentication. Chat
 connections currently retain their existing Yggdrasil transport and do not yet
 negotiate Ed25519 identity proofs. The fingerprint display states this explicitly.
-Peer-key pinning, manual fingerprint verification and following remain separate
-features; local key creation does not establish trust in a peer key or change
-the manual contact allowlist.
+Manual peer-key pins record a locally selected key for future authentication;
+chat connections do not yet prove possession of it. Following remains separate
+from identity trust and the manual contact allowlist.
 
 The native cryptographic implementation has not been independently security
 audited; constant-time execution and complete memory erasure are not guaranteed.

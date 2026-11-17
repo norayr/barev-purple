@@ -121,6 +121,8 @@ Currently, if you want to change your contact's port, you need to
 * Persistent local Ed25519 keys and fingerprint display in **My Barev address**.
   See [account identities and backups](identity.md); chat identity authentication
   is a separate protocol step.
+* Manual peer-key pinning through the contact menu's **Peer identity...** action,
+  with fingerprint comparison and explicit approval of replacements.
 * Jingle RTP audio/video calls when built with `USE_VV=1`.
 
 # What does not work
