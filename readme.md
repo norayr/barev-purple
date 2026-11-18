@@ -89,6 +89,11 @@ make test-tls
 The test driver requires Python `cryptography` and checks mutual Ed25519
 authentication, exact peer-key pins, partial I/O and failure cleanup.
 
+`make test-auth-stream test-auth-protocol` checks STARTTLS and SASL EXTERNAL
+sequencing, stream restarts and live pinned socket paths using disposable
+profiles. Live checks also cover pre-authentication traffic, corrupt pins,
+contact binding, queued messages and blocked writes.
+
 # Usage
 Because Barev does not do discovery, you must exchange contact details out-of-band.
 

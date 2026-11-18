@@ -113,9 +113,11 @@ static gboolean run_timer(guint id)
 static void receive(BonjourJabberConversation *conversation, const char *text)
 {
     guint source = conversation->rx_handler;
+    size_t i;
     CHECK(source && sources[source].active);
     CHECK(send(peer_socket, text, strlen(text), 0) == (ssize_t)strlen(text));
-    sources[source].input(sources[source].data, sources[source].fd, PURPLE_INPUT_READ);
+    for (i = 0; i < strlen(text) && sources[source].active; ++i)
+        sources[source].input(sources[source].data, sources[source].fd, PURPLE_INPUT_READ);
 }
 
 static BonjourJabberConversation *incoming(void)
@@ -160,6 +162,7 @@ int main(int argc, char **argv)
     purple_account_set_enabled(account, purple_core_get_ui(), TRUE);
     CHECK(account->gc && !account->gc->proto_data);
     data = g_new0(BonjourData, 1); data->jid = g_strdup("fi&xture@200::1");
+    data->identity.active = TRUE;
     jabber = g_new0(BonjourJabber, 1); jabber->account = account; jabber->port = 1337;
     data->jabber_data = jabber; purple_connection_set_protocol_data(account->gc, data);
     buddy = purple_buddy_new(account, "B&b@200::2", NULL); purple_blist_add_buddy(buddy, NULL, NULL, NULL);

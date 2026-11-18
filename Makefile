@@ -220,9 +220,9 @@ tests/address-test: tests/address-test.c $(wildcard $(SOURCE_DIR)/*.h)
 test-addresses: $(PLUGIN) tests/address-test
 	python3 "$(SOURCE_DIR)/tests/check-addresses.py" "$(CURDIR)/tests/address-test" "$(abspath $(PLUGIN))"
 
-tests/parser-test: tests/parser-test.c parser.c address.c $(wildcard $(SOURCE_DIR)/*.h)
+tests/parser-test: tests/parser-test.c parser.c address.c auth-stream.c $(wildcard $(SOURCE_DIR)/*.h)
 	mkdir -p tests
-	$(CC) $(CFLAGS) -I"$(SOURCE_DIR)" "$(SOURCE_DIR)/tests/parser-test.c" "$(SOURCE_DIR)/parser.c" "$(SOURCE_DIR)/address.c" -o "$@" $(LDLIBS) $(shell pkg-config --libs gmodule-2.0)
+	$(CC) $(CFLAGS) -I"$(SOURCE_DIR)" "$(SOURCE_DIR)/tests/parser-test.c" "$(SOURCE_DIR)/parser.c" "$(SOURCE_DIR)/address.c" "$(SOURCE_DIR)/auth-stream.c" -o "$@" $(LDLIBS) $(shell pkg-config --libs gmodule-2.0)
 
 .PHONY: test-parser
 tests/stream-io-test: tests/stream-io-test.c $(wildcard $(SOURCE_DIR)/*.h)
@@ -266,6 +266,14 @@ tests/auth-stream-test: $(SOURCE_DIR)/tests/auth-stream-test.c $(SOURCE_DIR)/aut
 .PHONY: test-auth-stream
 test-auth-stream: tests/auth-stream-test
 	python3 "$(SOURCE_DIR)/tests/check-auth-stream.py" "$(abspath tests/auth-stream-test)"
+
+tests/auth-protocol-host: $(SOURCE_DIR)/tests/auth-protocol-host.c $(wildcard $(SOURCE_DIR)/*.h)
+	mkdir -p tests
+	$(CC) $(CFLAGS) -I"$(SOURCE_DIR)" "$(SOURCE_DIR)/tests/auth-protocol-host.c" -o "$@" $(LDLIBS) $(shell pkg-config --libs gmodule-2.0)
+
+.PHONY: test-auth-protocol
+test-auth-protocol: $(PLUGIN) tests/auth-protocol-host
+	python3 "$(SOURCE_DIR)/tests/check-auth-protocol.py" --c "$(abspath tests/auth-protocol-host)" "$(abspath $(PLUGIN))"
 
 .PHONY: test-identities
 test-identities: tests/identity-test

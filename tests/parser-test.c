@@ -67,6 +67,9 @@ G_MODULE_EXPORT void bonjour_jabber_close_conversation(BonjourJabberConversation
 void bonjour_jabber_process_packet(PurpleBuddy *buddy, xmlnode *packet)
 { CHECK(buddy && packet && !g_strcmp0(xmlnode_get_namespace(packet), "jabber:client")); ++packets; }
 
+void bonjour_jabber_auth_packet(BonjourJabberConversation *conversation, xmlnode *packet)
+{ (void)conversation; (void)packet; CHECK(FALSE); }
+
 static PurpleBuddy *contact(const char *name, const char *saved_ip)
 {
     PurpleBuddy *buddy = purple_buddy_new(account, name, NULL);
@@ -101,6 +104,7 @@ static void cleanup(BonjourJabberConversation *conversation)
     g_slist_free(buddies);
     bonjour_parser_destroy(conversation);
     g_free(conversation->ip); g_free(conversation->local_ip); g_free(conversation->buddy_name);
+    g_free(conversation->bound_peer);
 }
 
 static void feed(BonjourJabberConversation *conversation, const char *text, unsigned mode)
@@ -358,6 +362,7 @@ int main(int argc, char **argv)
     purple_account_set_enabled(account, purple_core_get_ui(), TRUE);
     CHECK(account->gc && !account->gc->proto_data);
     data = g_new0(BonjourData, 1); data->jid = g_strdup("fixture@200::1");
+    data->identity.active = TRUE;
     data->jabber_data = g_new0(BonjourJabber, 1); data->jabber_data->account = account;
     purple_connection_set_protocol_data(account->gc, data);
     known = contact("Bob@200::2", "200::2"); other = contact("Other@200::2", "200::2");

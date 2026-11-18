@@ -21,6 +21,7 @@
  */
 
 #include "internal.h"
+#include "peer-pins.h"
 
 #ifndef _WIN32
 #include <errno.h>
@@ -249,6 +250,9 @@ static guint barev_avatar_id_counter = 0;
 static GSList *barev_conversations;
 static gboolean bonjour_peer_allowed(PurpleAccount *account, const char *ip);
 static gint _send_data(PurpleBuddy *pb, char *message);
+static void barev_auth_drive(BonjourJabberConversation *bconv);
+static void barev_auth_action(BonjourJabberConversation *bconv, int action);
+static void _client_socket_handler(gpointer data, gint socket, PurpleInputCondition condition);
 static char *bonjour_jabber_packet_xml(PurpleBuddy *pb, xmlnode *packet);
 static gchar * barev_make_iq_id(const char *prefix);
 static void _jabber_parse_and_write_message_to_ui(xmlnode *message_node, PurpleBuddy *pb);
@@ -1254,6 +1258,8 @@ bonjour_jabber_process_packet(PurpleBuddy *pb, xmlnode *packet)
         return;
 
     bb = purple_buddy_get_protocol_data(pb);
+    if (bb && bb->conversation && bb->conversation->auth_required &&
+        !barev_auth_ready(&bb->conversation->auth)) return;
     if (bb && bb->conversation)
         bb->conversation->last_activity = time(NULL);
 
@@ -1450,6 +1456,17 @@ bonjour_jabber_frame_timeout(gpointer data)
   if (bconv->closing || bconv->close_timeout) {
     bconv->frame_timer = 0;
     return FALSE;
+  }
+  if (bconv->auth_required && !barev_auth_ready(&bconv->auth) &&
+      g_get_monotonic_time()-bconv->auth_started >= PENDING_STREAM_TIMEOUT*G_USEC_PER_SEC) {
+    bconv->frame_timer = 0;
+    bonjour_jabber_close_conversation(bconv);
+    return FALSE;
+  }
+  if (bconv->auth_required) {
+    barev_auth_drive(bconv);
+    if (!bconv->close_timeout && bconv->tls && barev_tls_pending(bconv->tls))
+      _client_socket_handler(bconv, bconv->socket, PURPLE_INPUT_READ);
   }
   if (g_get_monotonic_time()-bconv->frame_started < deadline*G_USEC_PER_SEC) return TRUE;
   bconv->frame_timer = 0;
@@ -1695,6 +1712,8 @@ _send_data_write_cb(gpointer data, gint source, PurpleInputCondition cond)
   if (!bconv || bconv->closing || bconv->close_timeout != 0)
     return;
 
+  if (bconv->auth_required && !barev_auth_ready(&bconv->auth)) return;
+
   pb = bconv->pb;
   bb = pb ? purple_buddy_get_protocol_data(pb) : NULL;
 
@@ -1712,19 +1731,26 @@ _send_data_write_cb(gpointer data, gint source, PurpleInputCondition cond)
   writelen = purple_circ_buffer_get_max_read(bconv->tx_buf);
 
   if (writelen == 0) {
-    purple_input_remove(bconv->tx_handler);
+    if (bconv->tx_handler) purple_input_remove(bconv->tx_handler);
     bconv->tx_handler = 0;
     return;
   }
 
-  ret = send(bconv->socket, bconv->tx_buf->outptr, writelen, MSG_NOSIGNAL);
+  ret = bconv->tls ? barev_tls_write(bconv->tls, bconv->tx_buf->outptr, writelen) :
+      send(bconv->socket, bconv->tx_buf->outptr, writelen, MSG_NOSIGNAL);
 
-  if (ret < 0 && barev_sock_transient())
+  if (bconv->tls && ret == BAREV_TLS_WOULD_BLOCK) {
+    if (!barev_tls_wants_write(bconv->tls) && bconv->tx_handler) {
+      purple_input_remove(bconv->tx_handler); bconv->tx_handler = 0;
+    }
+    return;
+  }
+  if (!bconv->tls && ret < 0 && barev_sock_transient())
     return;
   else if (ret <= 0) {
     PurpleConversation *conv = NULL;
     PurpleAccount *account = NULL;
-    const char *error = g_strerror(errno);
+    const char *error = bconv->tls ? barev_tls_error(bconv->tls) : g_strerror(errno);
 
     purple_debug_error("barev", "Error sending message to buddy %s error: %s\n",
            purple_buddy_get_name(pb), error ? error : "(null)");
@@ -1742,6 +1768,8 @@ _send_data_write_cb(gpointer data, gint source, PurpleInputCondition cond)
   }
 
   purple_circ_buffer_mark_read(bconv->tx_buf, ret);
+  if (bconv->tls && !bconv->tx_handler && purple_circ_buffer_get_max_read(bconv->tx_buf))
+    bconv->tx_handler = purple_input_add(bconv->socket, PURPLE_INPUT_WRITE, _send_data_write_cb, bconv);
 }
 
 static gint _send_data(PurpleBuddy *pb, char *message)
@@ -1768,19 +1796,29 @@ static gint _send_data(PurpleBuddy *pb, char *message)
   if (bconv->closing || bconv->close_timeout != 0)
     return -1;
 
+  if (bconv->tls && barev_auth_ready(&bconv->auth)) {
+    /* Start TLS writes from the circular buffer so a blocked prefix never
+     * changes length when a later append wraps around its allocation. */
+    purple_circ_buffer_append(bconv->tx_buf, message, len);
+    if (!bconv->tx_handler)
+      bconv->tx_handler = purple_input_add(bconv->socket, PURPLE_INPUT_WRITE, _send_data_write_cb, bconv);
+    return 0;
+  }
+
   /* If we're not ready to actually send, append it to the buffer */
   if (bconv->tx_handler != 0
       || bconv->connect_data != NULL
       || bconv->sent_stream_start != FULLY_SENT
       || !bconv->recv_stream_start
+      || (bconv->auth_required && !barev_auth_ready(&bconv->auth))
       || purple_circ_buffer_get_max_read(bconv->tx_buf) > 0) {
-    ret = -1;
+    ret = BAREV_TLS_WOULD_BLOCK;
     errno = EAGAIN;
   } else {
-    ret = send(bconv->socket, message, len, MSG_NOSIGNAL);
+    ret = bconv->tls ? barev_tls_write(bconv->tls, message, len) : send(bconv->socket, message, len, MSG_NOSIGNAL);
   }
 
-  if (ret == -1 && barev_sock_transient())
+  if (ret == BAREV_TLS_WOULD_BLOCK || (!bconv->tls && ret == -1 && barev_sock_transient()))
     ret = 0;
   else if (ret <= 0) {
     PurpleConversation *conv;
@@ -1804,7 +1842,8 @@ static gint _send_data(PurpleBuddy *pb, char *message)
 
   if (ret < len) {
     /* Don't interfere with the stream starting */
-    if (bconv->sent_stream_start == FULLY_SENT && bconv->recv_stream_start && bconv->tx_handler == 0)
+    if (bconv->sent_stream_start == FULLY_SENT && bconv->recv_stream_start && bconv->tx_handler == 0 &&
+        (!bconv->auth_required || barev_auth_ready(&bconv->auth)) && (!bconv->tls || ret > 0 || barev_tls_wants_write(bconv->tls)))
       bconv->tx_handler = purple_input_add(bconv->socket, PURPLE_INPUT_WRITE,
         _send_data_write_cb, bconv);
     purple_circ_buffer_append(bconv->tx_buf, message + ret, len - ret);
@@ -1955,8 +1994,26 @@ _client_socket_handler(gpointer data, gint socket, PurpleInputCondition conditio
     return;
   }
 
-  /* Read the data from the socket */
-  if ((len = recv(socket, message, sizeof(message) - 1, 0)) < 0) {
+  if (bconv->auth_required) {
+    unsigned budget = 16384;
+    barev_auth_drive(bconv);
+    while (budget && !bconv->closing && !bconv->close_timeout) {
+      size_t maximum = barev_auth_ready(&bconv->auth) ? MIN(budget, sizeof(message)-1) : 1;
+      if (bconv->tls && !barev_tls_authenticated(bconv->tls)) return;
+      len = bconv->tls ? barev_tls_read(bconv->tls, message, maximum) : recv(socket, message, maximum, 0);
+      if ((bconv->tls && len == BAREV_TLS_WOULD_BLOCK) || (!bconv->tls && len < 0 && barev_sock_transient())) break;
+      if (len <= 0) { async_bonjour_jabber_close_conversation(bconv); return; }
+      budget -= len;
+      bonjour_parser_process(bconv, message, len);
+      barev_auth_drive(bconv);
+    }
+    if (!bconv->close_timeout && barev_auth_ready(&bconv->auth) && purple_circ_buffer_get_max_read(bconv->tx_buf))
+      _send_data_write_cb(bconv, socket, PURPLE_INPUT_WRITE);
+    return;
+  }
+
+  /* Keep the first header byte-fed until the contact's pin policy is known. */
+  if ((len = recv(socket, message, bconv->pin_checked ? sizeof(message)-1 : 1, 0)) < 0) {
     /* There have been an error reading from the socket */
     if (len != -1 || !barev_sock_transient()) {
       const char *err = g_strerror(errno);
@@ -1994,6 +2051,7 @@ _client_socket_handler(gpointer data, gint socket, PurpleInputCondition conditio
 
   purple_debug_info("barev", "Receive: -%s- %" G_GSSIZE_FORMAT " bytes\n", message, len);
   bonjour_parser_process(bconv, message, len);
+  if (bconv->auth_required) barev_auth_drive(bconv);
 }
 
 
@@ -2066,6 +2124,7 @@ _start_stream(gpointer data, gint source, PurpleInputCondition condition)
   bconv->sent_stream_start = FULLY_SENT;
 
   bonjour_jabber_stream_started(bconv);
+  if (bconv->auth_required) barev_auth_drive(bconv);
 }
 
 static gboolean bonjour_jabber_send_stream_init(BonjourJabberConversation *bconv, int client_socket)
@@ -2084,6 +2143,11 @@ static gboolean bonjour_jabber_send_stream_init(BonjourJabberConversation *bconv
   len = strlen(stream_start);
 
   bconv->sent_stream_start = PARTIALLY_SENT;
+  if (bconv->tls) {
+    if (bconv->auth_output) { g_free(stream_start); return FALSE; }
+    bconv->auth_output = stream_start; bconv->auth_offset = 0; bconv->auth_header = TRUE;
+    return TRUE;
+  }
 
   /* Start the stream */
   ret = send(client_socket, stream_start, len, MSG_NOSIGNAL);
@@ -2124,6 +2188,92 @@ static gboolean bonjour_jabber_send_stream_init(BonjourJabberConversation *bconv
   g_free(stream_start);
 
   return TRUE;
+}
+
+static void barev_auth_action(BonjourJabberConversation *bconv, int action)
+{
+  if (action == BAREV_AUTH_NONE) return;
+  if (action == BAREV_AUTH_FAILED || bconv->auth_output || bconv->auth_action) {
+    purple_debug_warning("barev", "Peer stream authentication failed\n");
+    async_bonjour_jabber_close_conversation(bconv);
+  } else if (barev_auth_writing(&bconv->auth)) {
+    bconv->auth_output = g_strdup(barev_auth_output(&bconv->auth));
+    bconv->auth_offset = 0; bconv->auth_header = FALSE;
+  } else bconv->auth_action = action;
+}
+
+void bonjour_jabber_auth_packet(BonjourJabberConversation *bconv, xmlnode *packet)
+{
+  barev_auth_action(bconv, barev_auth_receive(&bconv->auth, packet));
+}
+
+static void barev_auth_drive(BonjourJabberConversation *bconv)
+{
+  unsigned steps;
+  gboolean blocked = FALSE, want_write;
+  if (bconv->in_parser || bconv->closing || bconv->close_timeout) return;
+  /* Stream-ready callbacks may synchronously disconnect through libpurple UI hooks. */
+  bconv->in_parser = TRUE;
+  for (steps = 0; steps < 16 && !bconv->close_timeout; ++steps) {
+    if (bconv->auth_action == BAREV_AUTH_BEGIN_TLS) {
+      BonjourData *bd = bconv->account && bconv->account->gc ? bconv->account->gc->proto_data : NULL;
+      char error[BAREV_TLS_ERROR_BYTES];
+      bconv->auth_action = BAREV_AUTH_NONE;
+      if (!bd || bconv->tls) { async_bonjour_jabber_close_conversation(bconv); break; }
+      bconv->tls = barev_tls_new(&bd->identity, bconv->peer_pin, 32, bconv->socket, bconv->incoming, error);
+      if (!bconv->tls) {
+        purple_debug_warning("barev", "TLS initialization failed: %s\n", error);
+        async_bonjour_jabber_close_conversation(bconv); break;
+      }
+    }
+    if (bconv->tls && !barev_tls_authenticated(bconv->tls)) {
+      int result = barev_tls_handshake(bconv->tls);
+      if (result < 0) {
+        purple_debug_warning("barev", "TLS authentication failed: %s\n", barev_tls_error(bconv->tls));
+        async_bonjour_jabber_close_conversation(bconv); break;
+      }
+      if (!result) break;
+      barev_auth_action(bconv, barev_auth_secured(&bconv->auth, TRUE));
+    }
+    if (bconv->auth_action == BAREV_AUTH_RESTART_TLS || bconv->auth_action == BAREV_AUTH_RESTART_SASL) {
+      bconv->auth_action = BAREV_AUTH_NONE;
+      bonjour_parser_setup(bconv);
+      bconv->auth_opened = FALSE; bconv->sent_stream_start = NOT_SENT;
+      bconv->frame_started = g_get_monotonic_time();
+      if (!bconv->incoming && !bonjour_jabber_send_stream_init(bconv, bconv->socket)) {
+        async_bonjour_jabber_close_conversation(bconv); break;
+      }
+    }
+    if (bconv->auth_action == BAREV_AUTH_READY) {
+      bconv->auth_action = BAREV_AUTH_NONE;
+      bonjour_jabber_stream_started(bconv);
+    }
+    if (!bconv->auth_output || bconv->close_timeout) break;
+    {
+      size_t length = strlen(bconv->auth_output)-bconv->auth_offset;
+      int sent = bconv->tls ? barev_tls_write(bconv->tls, bconv->auth_output+bconv->auth_offset, length) :
+          send(bconv->socket, bconv->auth_output+bconv->auth_offset, length, MSG_NOSIGNAL);
+      if ((bconv->tls && sent == BAREV_TLS_WOULD_BLOCK) || (!bconv->tls && sent < 0 && barev_sock_transient())) {
+        blocked = TRUE; break;
+      }
+      if (sent <= 0) { async_bonjour_jabber_close_conversation(bconv); break; }
+      bconv->auth_offset += sent;
+      if (bconv->auth_output[bconv->auth_offset]) continue;
+      g_free(bconv->auth_output); bconv->auth_output = NULL; bconv->auth_offset = 0;
+      if (bconv->auth_header) {
+        bconv->auth_header = FALSE; bconv->sent_stream_start = FULLY_SENT;
+        bonjour_jabber_stream_started(bconv);
+      } else barev_auth_action(bconv, barev_auth_sent(&bconv->auth));
+    }
+  }
+  want_write = bconv->tls && barev_tls_wants_write(bconv->tls);
+  if (bconv->auth_output && (!bconv->tls || !blocked)) want_write = TRUE;
+  if (!bconv->close_timeout && want_write && !bconv->auth_watch)
+    bconv->auth_watch = purple_input_add(bconv->socket, PURPLE_INPUT_WRITE, _client_socket_handler, bconv);
+  else if ((!want_write || bconv->close_timeout) && bconv->auth_watch) {
+    purple_input_remove(bconv->auth_watch); bconv->auth_watch = 0;
+  }
+  bconv->in_parser = FALSE;
 }
 
 /* This gets called when we've successfully sent our <stream:stream />
@@ -2187,6 +2337,16 @@ void bonjour_jabber_stream_started(BonjourJabberConversation *bconv) {
   if (bconv->sent_stream_start == FULLY_SENT &&
       bconv->recv_stream_start &&
       bconv->pb) {
+
+    if (bconv->auth_required) {
+      if (!bconv->auth_opened) {
+        bconv->auth_opened = TRUE;
+        barev_auth_action(bconv, barev_auth_opened(&bconv->auth));
+      }
+      if (!barev_auth_ready(&bconv->auth) || bconv->close_timeout) return;
+    }
+    if (bconv->ready_notified) return;
+    bconv->ready_notified = TRUE;
 
     PurpleBuddy *pb = bconv->pb;
     BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
@@ -2257,7 +2417,7 @@ void bonjour_jabber_stream_started(BonjourJabberConversation *bconv) {
         "</stream:error>"
         "</stream:stream>";
 
-    if (bconv->socket >= 0)
+    if (bconv->socket >= 0 && !bconv->tls)
       send(bconv->socket, reject_xml, sizeof(reject_xml) - 1, MSG_NOSIGNAL);
 
     async_bonjour_jabber_close_conversation(bconv);
@@ -2614,6 +2774,7 @@ bonjour_jabber_conv_match_by_name(BonjourJabberConversation *bconv)
     data = bconv->account && bconv->account->gc ? bconv->account->gc->proto_data : NULL;
     if (!canonical || !data || !data->jabber_data ||
         !bonjour_validate_endpoints(bconv, canonical)) goto rejected;
+    if (bconv->bound_peer && strcmp(bconv->bound_peer, canonical)) goto rejected;
 
     /* Match a complete canonical identity, never just a nickname or IP. */
     buddies = purple_find_buddies(bconv->account, NULL);
@@ -2626,6 +2787,25 @@ bonjour_jabber_conv_match_by_name(BonjourJabberConversation *bconv)
     }
     g_slist_free(buddies);
     if (!pb || !(bb = purple_buddy_get_protocol_data(pb))) goto rejected;
+    if (!bconv->pin_checked) {
+        const char *ui = purple_core_get_ui();
+        char *profile = ui && strstr(ui, "haze") ? g_build_filename(g_get_home_dir(), ".purple", NULL) : g_strdup(purple_user_dir());
+        char own[65], peer[65], fingerprint[72];
+        int status;
+        bconv->pin_checked = TRUE;
+        if (!barev_identity_identifier(&data->identity, own)) { g_free(profile); goto rejected; }
+        status = barev_pin_load(profile, own, canonical, peer, fingerprint);
+        g_free(profile);
+        if (status != BAREV_PIN_OK && status != BAREV_PIN_UNPINNED) goto rejected;
+        bconv->bound_peer = g_strdup(canonical);
+        bconv->auth_required = status == BAREV_PIN_OK;
+        if (bconv->auth_required) {
+            unsigned i;
+            for (i = 0; i < 32; ++i) bconv->peer_pin[i] = g_ascii_xdigit_value(peer[i*2])*16+g_ascii_xdigit_value(peer[i*2+1]);
+            barev_auth_init(&bconv->auth, bconv->incoming);
+            bconv->auth_started = g_get_monotonic_time();
+        }
+    }
 
     g_free(bconv->buddy_name);
     bconv->buddy_name = canonical;
@@ -3080,6 +3260,9 @@ bonjour_jabber_close_conversation(BonjourJabberConversation *bconv)
   }
 
   bconv->closing = TRUE;
+  if (bconv->auth_watch) { purple_input_remove(bconv->auth_watch); bconv->auth_watch = 0; }
+  g_free(bconv->bound_peer); bconv->bound_peer = NULL;
+  g_free(bconv->auth_output); bconv->auth_output = NULL;
 
   purple_debug_info("barev",
                     "Closing conversation %p fd=%d direction=%s peer=%s\n",

@@ -33,6 +33,7 @@
 #include "account.h"
 #include "circbuffer.h"
 #include "tls.h"
+#include "auth-stream.h"
 #include "libpurple/server.h"  /* PurpleTypingState */
 
 #define STREAM_END "</stream:stream>"
@@ -68,6 +69,14 @@ typedef struct _BonjourJabberConversation
   gboolean incoming;
   PurpleCircBuffer *tx_buf;
   BarevTLS *tls;
+  BarevAuth auth;
+  gboolean pin_checked, auth_required, auth_opened, ready_notified, auth_header;
+  int auth_action;
+  guint auth_watch;
+  gint64 auth_started;
+  unsigned char peer_pin[32];
+  char *bound_peer, *auth_output;
+  size_t auth_offset;
   int sent_stream_start; /* 0 = Unsent, 1 = Partial, 2 = Complete */
   gboolean recv_stream_start;
   /* TRUE while libxml is dispatching SAX callbacks for this conversation.
@@ -131,6 +140,7 @@ void bonjour_jabber_stream_started(BonjourJabberConversation *bconv);
 const char *bonjour_jabber_get_local_jid(BonjourJabberConversation *bconv);
 
 void bonjour_jabber_process_packet(PurpleBuddy *pb, xmlnode *packet);
+void bonjour_jabber_auth_packet(BonjourJabberConversation *bconv, xmlnode *packet);
 
 void bonjour_jabber_stop(BonjourJabber *data);
 

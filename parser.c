@@ -193,6 +193,8 @@ bonjour_parser_element_end_libxml(void *user_data, const xmlChar *element_name,
     bconv->frame_started = g_get_monotonic_time();
     if (end-bconv->frame_end > STANZA_LIMIT || ++bconv->input_events > 64) {
       parser_reject(bconv, "XML frame or input work limit");
+    } else if (bconv->auth_required && !barev_auth_ready(&bconv->auth)) {
+      bonjour_jabber_auth_packet(bconv, packet);
     } else if (ns && !strcmp(ns, STREAM_NS)) {
       if (!strcmp(packet->name, "error")) parser_reject(bconv, "peer stream error");
     } else if (ns && !strcmp(ns, CLIENT_NS)) {
