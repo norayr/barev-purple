@@ -141,6 +141,7 @@ SRCS = \
   barev.c \
   identity.c \
   tls.c \
+  auth-stream.c \
   identity-store.c \
   peer-pins.c \
   pin-ui.c \
@@ -257,6 +258,14 @@ tests/tls-test: $(SOURCE_DIR)/tests/tls-test.c $(SOURCE_DIR)/tls.c $(SOURCE_DIR)
 .PHONY: test-tls
 test-tls: tests/tls-test
 	python3 "$(SOURCE_DIR)/tests/check-tls.py" "$(abspath tests/tls-test)"
+
+tests/auth-stream-test: $(SOURCE_DIR)/tests/auth-stream-test.c $(SOURCE_DIR)/auth-stream.c $(SOURCE_DIR)/auth-stream.h
+	mkdir -p tests
+	$(CC) $(CFLAGS) -I"$(SOURCE_DIR)" "$(SOURCE_DIR)/tests/auth-stream-test.c" "$(SOURCE_DIR)/auth-stream.c" -o "$@" $(PURPLE_LIBS) $(GLIB_LIBS)
+
+.PHONY: test-auth-stream
+test-auth-stream: tests/auth-stream-test
+	python3 "$(SOURCE_DIR)/tests/check-auth-stream.py" "$(abspath tests/auth-stream-test)"
 
 .PHONY: test-identities
 test-identities: tests/identity-test
