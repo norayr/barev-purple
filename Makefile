@@ -8,6 +8,11 @@ endif
 SOURCE_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 CFLAGS  ?= -g -O2
 PYTHON  ?= python3
+PIDGIN_UI ?= $(if $(filter Windows_NT,$(OS)),0,$(shell pkg-config --exists pidgin && echo 1 || echo 0))
+ifeq ($(PIDGIN_UI),1)
+SECURITY_UI_CFLAGS := $(shell pkg-config --cflags pidgin) -DBAREV_PIDGIN_UI -Wno-deprecated-declarations
+SECURITY_UI_LIBS := $(shell pkg-config --libs pidgin gmodule-2.0)
+endif
 WARN    ?= -Wall -Wextra -Wno-unused-parameter
 ifeq ($(OS),Windows_NT)
   PICFLAG ?=
@@ -123,7 +128,7 @@ CFLAGS += $(WARN) $(PICFLAG) \
           -DBAREV_BUILD_ID=\"$(BAREV_BUILD_ID)\"
 
 CFLAGS += $(IMAGE_CFLAGS) $(CRYPTO_CFLAGS) $(TLS_CFLAGS)
-LDLIBS  = $(PURPLE_LIBS) $(GLIB_LIBS) $(LIBXML_LIBS) $(AVAHI_LIBS) $(LDLIBS_EXTRA) $(WIN_LIBS) $(IMAGE_LIBS) $(TLS_LIBS) $(CRYPTO_LIBS)
+LDLIBS  = $(PURPLE_LIBS) $(GLIB_LIBS) $(LIBXML_LIBS) $(AVAHI_LIBS) $(LDLIBS_EXTRA) $(WIN_LIBS) $(IMAGE_LIBS) $(TLS_LIBS) $(CRYPTO_LIBS) $(SECURITY_UI_LIBS)
 
 PLUGIN  = libbarev.$(EXT)
 
@@ -146,6 +151,7 @@ SRCS = \
   identity-store.c \
   peer-pins.c \
   pin-ui.c \
+  security-ui.c \
   buddy.c \
   avatar-cache.c \
   address.c \
@@ -190,6 +196,17 @@ $(PLUGIN): $(OBJS)
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
+
+security-ui.o: $(SOURCE_DIR)/security-ui.c $(SOURCE_DIR)/security-ui.h FORCE
+	$(CC) $(CFLAGS) $(SECURITY_UI_CFLAGS) -c "$<" -o "$@"
+
+tests/security-ui-test: $(SOURCE_DIR)/tests/security-ui-test.c $(SOURCE_DIR)/tests/security-mock/gtkconv.h $(SOURCE_DIR)/security-ui.c $(SOURCE_DIR)/security-ui.h
+	mkdir -p tests
+	$(CC) $(CFLAGS) -DBAREV_PIDGIN_UI -I"$(SOURCE_DIR)/tests/security-mock" -I"$(SOURCE_DIR)" "$(SOURCE_DIR)/tests/security-ui-test.c" "$(SOURCE_DIR)/security-ui.c" -o "$@" $(shell pkg-config --libs purple gmodule-2.0 gobject-2.0)
+
+.PHONY: test-security-ui
+test-security-ui: tests/security-ui-test
+	"$(abspath tests/security-ui-test)"
 
 barev_res.o: barev.rc $(wildcard *.h)
 	$(WINDRES) $(RC_FLAGS) --include-dir=. -i barev.rc -o $@ -O coff

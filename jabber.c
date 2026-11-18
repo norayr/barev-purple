@@ -2190,6 +2190,49 @@ static gboolean bonjour_jabber_send_stream_init(BonjourJabberConversation *bconv
   return TRUE;
 }
 
+int bonjour_jabber_security(void *owner, const char *who, char fingerprint[72])
+{
+  PurpleAccount *account = owner;
+  GSList *buddies, *item;
+  char *canonical = barev_address_identity(who, FALSE);
+  int result = BAREV_SECURITY_DISCONNECTED;
+  fingerprint[0] = 0;
+  if (!canonical) return result;
+  buddies = purple_find_buddies(account, NULL);
+  for (item = buddies; item; item = item->next) {
+    PurpleBuddy *buddy = item->data;
+    BonjourBuddy *bb = purple_buddy_get_protocol_data(buddy);
+    char *identity = bonjour_buddy_identity(buddy);
+    gboolean matched = identity && !strcmp(identity, canonical);
+    g_free(identity);
+    if (matched && bb && bb->conversation) {
+      BonjourJabberConversation *c = bb->conversation;
+      if (!c->closing && !c->close_timeout && c->socket >= 0) {
+        result = BAREV_SECURITY_CONNECTING;
+        if (c->ready_notified && c->sent_stream_start == FULLY_SENT && c->recv_stream_start) {
+          if (!c->auth_required) result = BAREV_SECURITY_LEGACY;
+          else if (c->pin_checked && c->bound_peer && !strcmp(c->bound_peer, canonical) &&
+              c->tls && barev_tls_authenticated(c->tls) && barev_auth_ready(&c->auth)) {
+            char key[65], normalized[65];
+            unsigned i;
+            for (i = 0; i < 32; ++i) g_snprintf(key+i*2, 3, "%02x", c->peer_pin[i]);
+            if (barev_pin_describe(key, normalized, fingerprint)) result = BAREV_SECURITY_AUTHENTICATED;
+          }
+        }
+      }
+      break;
+    }
+  }
+  g_slist_free(buddies); g_free(canonical);
+  return result;
+}
+
+static void security_changed(BonjourJabberConversation *bconv)
+{
+  BonjourData *bd = bconv->account && bconv->account->gc ? bconv->account->gc->proto_data : NULL;
+  if (bd) BarevSecurityUI_Update(bd->security);
+}
+
 static void barev_auth_action(BonjourJabberConversation *bconv, int action)
 {
   if (action == BAREV_AUTH_NONE) return;
@@ -2347,6 +2390,7 @@ void bonjour_jabber_stream_started(BonjourJabberConversation *bconv) {
     }
     if (bconv->ready_notified) return;
     bconv->ready_notified = TRUE;
+    security_changed(bconv);
 
     PurpleBuddy *pb = bconv->pb;
     BonjourBuddy *bb = purple_buddy_get_protocol_data(pb);
@@ -2821,6 +2865,7 @@ bonjour_jabber_conv_match_by_name(BonjourJabberConversation *bconv)
     bb->conversation = bconv;
     data->jabber_data->pending_conversations =
         g_slist_remove(data->jabber_data->pending_conversations, bconv);
+    security_changed(bconv);
     return;
 
 rejected:
@@ -3239,6 +3284,7 @@ async_bonjour_jabber_close_conversation(BonjourJabberConversation *bconv)
                     bconv, bconv->socket);
   bconv->close_timeout =
       purple_timeout_add(0, _async_bonjour_jabber_close_conversation_cb, bconv);
+  security_changed(bconv);
 }
 
 void
@@ -3260,6 +3306,7 @@ bonjour_jabber_close_conversation(BonjourJabberConversation *bconv)
   }
 
   bconv->closing = TRUE;
+  security_changed(bconv);
   if (bconv->auth_watch) { purple_input_remove(bconv->auth_watch); bconv->auth_watch = 0; }
   g_free(bconv->bound_peer); bconv->bound_peer = NULL;
   g_free(bconv->auth_output); bconv->auth_output = NULL;

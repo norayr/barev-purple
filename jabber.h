@@ -141,6 +141,7 @@ const char *bonjour_jabber_get_local_jid(BonjourJabberConversation *bconv);
 
 void bonjour_jabber_process_packet(PurpleBuddy *pb, xmlnode *packet);
 void bonjour_jabber_auth_packet(BonjourJabberConversation *bconv, xmlnode *packet);
+int bonjour_jabber_security(void *account, const char *who, char fingerprint[72]);
 
 void bonjour_jabber_stop(BonjourJabber *data);
 

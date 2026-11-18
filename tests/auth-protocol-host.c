@@ -15,6 +15,7 @@ static gpointer accept_data;
 static int accept_fd;
 static gboolean dialing;
 static size_t (*certificate)(const BarevTLS *, unsigned char *, size_t);
+static int (*security)(void *, const char *, char[72]);
 
 static void message_received(PurpleAccount *account, const char *sender, const char *message,
     PurpleConversation *conversation, PurpleMessageFlags flags, gpointer data)
@@ -102,6 +103,10 @@ static gboolean command(gint fd, GIOCondition condition, gpointer data)
     if (!strcmp(line, "tls-cert\n")) {
         unsigned char bytes[4096]; size_t i, length = conversation ? certificate(conversation->tls, bytes, sizeof(bytes)) : 0;
         printf("CERT "); for (i = 0; i < length; ++i) printf("%02x", bytes[i]); putchar('\n');
+    } else if (!strcmp(line, "security\n")) {
+        char fingerprint[72];
+        int state = security(purple_buddy_get_account(buddy), purple_buddy_get_name(buddy), fingerprint);
+        printf("SECURITY %d %s\n", state, fingerprint);
     } else if (!strcmp(line, "state\n")) printf("STATE %d %d\n", conversation && conversation->ready_notified, conversation != NULL);
     else if (!strcmp(line, "expire\n")) {
         if (conversation) conversation->auth_started -= 31*G_USEC_PER_SEC;
@@ -143,6 +148,7 @@ int main(int argc, char **argv)
     LOAD("bonjour_jabber_start", start); LOAD("bonjour_jabber_stop", stop);
     LOAD("bonjour_jabber_open_stream", open_stream);
     LOAD("barev_identity_open", identity); LOAD("barev_tls_certificate", certificate);
+    LOAD("bonjour_jabber_security", security);
     account = purple_account_new("alice", "prpl-barev"); purple_accounts_add(account);
     purple_account_set_enabled(account, purple_core_get_ui(), TRUE);
     if (!account->gc || account->gc->proto_data) return 7;

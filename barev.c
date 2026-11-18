@@ -1193,6 +1193,7 @@ bonjour_login_barev(PurpleAccount *account)
    * populated.  Moving this earlier caused set_list_received to see an
    * empty blist, making the initial Telepathy contact list empty. */
   bd->images = barev_images_new(account);
+  bd->security = BarevSecurityUI_New(account, bonjour_jabber_security, account);
   purple_connection_set_state(gc, PURPLE_CONNECTED);
 
 #ifdef USE_VV
@@ -1229,6 +1230,10 @@ bonjour_close(PurpleConnection *connection)
 {
   BonjourData *bd = connection->proto_data;
   PurpleAccount *account = purple_connection_get_account(connection);
+
+  if (bd && bd->security) {
+    BarevSecurityUI *security = bd->security; bd->security = NULL; BarevSecurityUI_Close(security);
+  }
 
   if (bd && bd->pins) {
     BarevPinUI *pins = bd->pins; bd->pins = NULL; BarevPinUI_Close(pins);

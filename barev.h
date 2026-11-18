@@ -33,6 +33,7 @@
 #include "images.h"
 #include "identity.h"
 #include "pin-ui.h"
+#include "security-ui.h"
 
 #define BONJOUR_GROUP_NAME _("Barev")
 #define BONJOUR_PROTOCOL_NAME "barev"
@@ -57,6 +58,7 @@ typedef struct _BonjourData
   BarevImages *images;
   BarevIdentity identity;
   BarevPinUI *pins;
+  BarevSecurityUI *security;
 } BonjourData;
 
 /**

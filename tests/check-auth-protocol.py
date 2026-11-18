@@ -75,7 +75,16 @@ class Host:
         self.process.stdin.write((text+"\n").encode()); self.process.stdin.flush()
 
     def state(self):
-        self.command("state"); return tuple(map(int, self.wait("STATE ").split()[1:]))
+        self.command("state"); state = tuple(map(int, self.wait("STATE ").split()[1:]))
+        security, fingerprint = self.security()
+        assert (security == 3) == bool(state[0]), (state, security, fingerprint)
+        assert bool(fingerprint) == (security == 3), (security, fingerprint)
+        return state
+
+    def security(self):
+        self.command("security")
+        fields = self.wait("SECURITY ").split(maxsplit=2)
+        return int(fields[1]), fields[2] if len(fields) == 3 else ""
 
     def certificate(self):
         deadline = time.monotonic()+5
@@ -245,6 +254,7 @@ with tempfile.TemporaryDirectory(prefix="barev-auth-protocol-") as temporary:
                     assert message.find("{jabber:client}body").text == "queued before authentication"
                 else: assert first.tag == "{jabber:client}presence"
                 assert host.state()[0] == 1
+                assert host.security() == (3, "SHA256:"+hashlib.sha256(public(SEEDS[1])).hexdigest())
                 wire.send("<message type='chat'><body>authenticated hello</body></message>")
                 assert base64.b64decode(host.wait("MESSAGE ").split()[1]) == b"authenticated hello"
                 host.command("send "+base64.b64encode(b"authenticated reply").decode())
@@ -304,10 +314,38 @@ with tempfile.TemporaryDirectory(prefix="barev-auth-protocol-") as temporary:
                     wire.closed(); assert host.state()[0] == 0; checks += 1; continue
                 wire.send("<stream:features/>")
                 assert wire.stanza().tag == "{jabber:client}presence" and host.state()[0] == 1
+                assert host.security() == (3, "SHA256:"+hashlib.sha256(public(SEEDS[1])).hexdigest())
                 checks += 1
             finally:
                 listener.close(); wire.socket.close(); host.close()
         print(mode+": both STARTTLS roles, restarts, SASL EXTERNAL and fail-closed gates passed", flush=True)
+        for late_pin in (False, True):
+            profile = root/(mode+"-legacy-"+str(late_pin)); profile.mkdir(mode=0o700)
+            pin = prepare(profile, public(SEEDS[1])); record = pin.read_bytes(); pin.unlink()
+            if mode == "native":
+                host = Host([str(tool/"ProtocolHost"), str(tool/"libvoc-barev-test.so"), str(profile), "9", "test"], profile)
+                wire = Wire(socket.create_connection(("::1", host.port), timeout=10))
+            else:
+                local, remote = socket.socketpair()
+                try: host = Host([str(tool[0]), str(profile), str(tool[1]), str(local.fileno())], profile, (local.fileno(),))
+                finally: local.close()
+                wire = Wire(remote)
+            try:
+                wire.send(opening()); wire.header()
+                assert wire.stanza().tag == "{jabber:client}presence"
+                assert host.security() == (2, "")
+                if late_pin: pin.write_bytes(record)
+                wire.send("<message><body>legacy hello</body></message>")
+                assert base64.b64decode(host.wait("MESSAGE ").split()[1]) == b"legacy hello"
+                assert host.security() == (2, "")
+                wire.socket.close()
+                deadline = time.monotonic()+5
+                while host.security() != (0, ""):
+                    assert time.monotonic() < deadline, "stale security state after disconnect"
+                    time.sleep(0.01)
+                checks += 1
+            finally:
+                wire.socket.close(); host.close()
     if options.native and options.c:
         for c_client in (False, True):
             profiles = [root/("cross-"+str(c_client)+"-"+str(i)) for i in range(2)]
