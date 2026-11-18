@@ -56,7 +56,7 @@ static void approve(gpointer data, int choice)
         if (status == 4) error(ui, "The stored key changed while this dialog was open. Reopen Peer identity and compare the fingerprints again.");
         else if (status) error(ui, "The peer pin could not be stored. Check the profile's barev directory and restore unreadable or corrupt pin records from backup.");
         else if (!ui->closed) purple_notify_info(ui, "Peer identity", "Peer key pinned",
-            "The manually selected key is saved. Identity authentication is not yet negotiated on chat connections.");
+            "The key is saved for new connections. Both peers must pin each other's key, then reconnect their accounts to require authenticated chats.");
     }
     prompt_unref(p);
 }
@@ -75,7 +75,7 @@ static void input(gpointer data, const char *text)
     }
     if (!strcmp(p->expected, p->proposed)) { detach(p); goto done; }
     contact = purple_markup_escape_text(p->who, -1);
-    description = g_strdup_printf("Contact: %s\n\nCurrent fingerprint: %s\nNew fingerprint: %s\n\nNew public key: %s\n\nCompare the new fingerprint through an independent trusted channel before approving. This saves a key for future authentication; chat connections do not yet prove possession of it.",
+    description = g_strdup_printf("Contact: %s\n\nCurrent fingerprint: %s\nNew fingerprint: %s\n\nNew public key: %s\n\nCompare the new fingerprint through an independent trusted channel before approving. Key changes apply to new connections. Both peers must pin each other's key, then reconnect their accounts to require authenticated chats.",
         contact, *p->expected ? p->old_fingerprint : "None", fingerprint, p->proposed);
     g_free(contact);
     p->stage = 2;
@@ -147,6 +147,8 @@ void BarevPinUI_Info(BarevPinUI *ui, const char *who, PurpleNotifyUserInfo *info
     purple_notify_user_info_add_pair_plaintext(info, "Peer key pin",
         status == 0 ? "Manually pinned" : status == 1 ? "No pinned key" : "Pin unavailable or invalid");
     purple_notify_user_info_add_pair_plaintext(info, "Chat authentication",
-        "Identity authentication is not yet negotiated on chat connections.");
+        status == 0 ? "Required on new connections: mutual TLS 1.3 and SASL EXTERNAL." :
+        status == 1 ? "No pinned key: new connections use legacy transport without identity authentication." :
+        "Connections are blocked until the peer key pin can be read.");
     unref(ui);
 }

@@ -136,10 +136,11 @@ Currently, if you want to change your contact's port, you need to
   cache reuse. See [avatar exchange and caching](barev.md#4-avatars-xep-0153).
 * Chat State Notification (XEP-0085) - a bit of composing events.
 * Persistent local Ed25519 keys and fingerprint display in **My Barev address**.
-  See [account identities and backups](identity.md); chat identity authentication
-  is a separate protocol step.
+  See [account identities, authenticated chats and backups](identity.md).
 * Manual peer-key pinning through the contact menu's **Peer identity...** action,
   with fingerprint comparison and explicit approval of replacements.
+* STARTTLS, mutual TLS 1.3 and SASL EXTERNAL for pinned contacts. Both peers must
+  save each other's key and reconnect. Unpinned contacts retain legacy transport.
 * Jingle RTP audio/video calls when built with `USE_VV=1`.
 
 # What does not work
@@ -229,11 +230,11 @@ Formatted messaging:
 - Port 5299 fixed (vs. dynamic port assignment in XEP-0174)
 
 ### 3. **Simplified Stream Features**
-**Stripped-down from RFC 6120**
-- No TLS negotiation
-- No SASL authentication
-- No compression
-- No stream features exchange
+**Pinned authentication using RFC 6120 stream negotiation**
+- STARTTLS with mutual TLS 1.3 authentication against manually pinned Ed25519 keys
+- SASL EXTERNAL mapping the authenticated key to the selected contact
+- XML stream restarts after TLS and SASL, with application traffic gated until completion
+- Legacy streams for unpinned contacts
 
 ### 4. **One-Pipe Connection Model**
 **Barev-specific optimization**
@@ -341,6 +342,8 @@ Formatted messaging:
 
 ### Extension Namespaces:
 - `urn:xmpp:ping` - Ping/pong (also `urn:yggb:ping` in Barev)
+- `urn:ietf:params:xml:ns:xmpp-tls` - STARTTLS negotiation
+- `urn:ietf:params:xml:ns:xmpp-sasl` - SASL EXTERNAL
 - `http://jabber.org/protocol/si` - Stream initiation
 - `http://jabber.org/protocol/bytestreams` - File transfer
 - `http://jabber.org/protocol/feature-neg` - Feature negotiation
@@ -353,6 +356,11 @@ Formatted messaging:
 ## Protocol Flow Summary
 
 ### 1. **Connection Establishment** (XEP-0174 inspired)
+
+Unpinned contacts use the legacy flow below. Pinned contacts complete STARTTLS,
+mutual TLS 1.3 and SASL EXTERNAL before exchanging presence or messages. See
+[authenticated chats](identity.md#authenticated-chats).
+
 ```
 Client A                                  Client B
     |                                         |
@@ -404,8 +412,6 @@ Client A                                  Client B
 ## Omitted XEPs (Not Used in Barev)
 
 ### 1. **Security**
-- **XEP-0035**: TLS - Not used (no encryption)
-- **XEP-0038**: SASL - Not used (no authentication)
 - **XEP-0116**: Encryption - Not used
 
 ### 2. **Advanced Features**
@@ -456,13 +462,13 @@ Client A                                  Client B
 
 ### 1. **Interoperability with Standard XMPP**
 - **Not compatible** with standard XMPP servers
-- **Not compatible** with clients that require TLS/SASL
+- Pinned peers require mutual Ed25519 TLS authentication and SASL EXTERNAL
 - **Only compatible** with other Barev implementations
 
 ### 2. **Backwards Compatibility**
 - All versions must support basic stanzas (`message`, `presence`, `iq`)
 - New versions can add optional features
-- Unknown stanzas should be ignored (not rejected)
+- Unknown application stanzas are ignored once the stream is ready
 
 ### 3. **Forward Compatibility**
 - Future versions should maintain basic protocol flow

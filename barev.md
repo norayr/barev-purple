@@ -48,7 +48,7 @@ reference, malformed-input, information-window, alias, and persistence tests.
 - **Port**: 5299 (default, user-configurable)
 - **Protocol**: TCP over IPv6 (Yggdrasil addresses only)
 - **Encoding**: UTF-8 XML
-- **Security**: No TLS, no authentication (direct trusted connections); Security is taken care of by Yggdrasil network.
+- **Security**: Pinned contacts require mutual TLS 1.3 and SASL EXTERNAL over Yggdrasil. Unpinned contacts retain legacy transport; see [authenticated chats](identity.md#authenticated-chats).
 
 ### 2. Connection Model: One Pipe Per Buddy
 **Key Principle**: Each buddy pair maintains exactly ONE active TCP connection:

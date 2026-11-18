@@ -47,6 +47,27 @@ Peer-pin files contain public data and use ordinary file APIs inside the private
 `barev` directory. Use one active client per persistent profile. Keep that
 directory private and include pin files in profile backups.
 
+## Authenticated chats
+
+Both contacts must save each other's verified public key before reconnecting
+their accounts. Adding or replacing a pin applies to new connections; it does
+not upgrade an existing connection.
+
+A new connection to a pinned contact requires STARTTLS, mutual TLS 1.3 and
+SASL EXTERNAL. Each peer proves possession of its persistent Ed25519 key using
+a self-signed TLS certificate. Trust comes from the exact public-key pin.
+Certificates can be renewed without changing the persistent identity or pin.
+
+The initially selected canonical contact and key remain fixed across the TLS
+and SASL stream restarts. Presence, messages and other application stanzas wait
+until authentication completes. A key mismatch, malformed pin, missing TLS or
+failed SASL exchange closes the connection without a plaintext retry.
+
+Contacts without a saved pin retain legacy transport without identity
+authentication. Pin both sides and reconnect to require authenticated chats.
+TLS protects the XML chat stream; separate file-transfer data connections use
+their existing Yggdrasil transport.
+
 ## Backup and recovery
 
 Back up the entire profile, including `barev/`, `accounts.xml` and `blist.xml`.
@@ -94,22 +115,15 @@ retried after the other client finishes.
 
 ## Implementation and authentication
 
-The Oberon plugin uses VOC's native Ed25519 and SHA implementations. The C
-plugin uses OpenSSL libcrypto 1.1.1 or newer. Peer-pin persistence in the Oberon
-plugin uses VOC's `oocFiles` byte channels and temporary-file registration.
+The Oberon plugin uses VOC's native Ed25519, SHA and TLS 1.3 implementations.
+The C plugin uses OpenSSL libcrypto and libssl 1.1.1 or newer. Peer-pin
+persistence in the Oberon plugin uses VOC's `oocFiles` byte channels and
+temporary-file registration.
 Private identity-file operations are kept in a dedicated native filesystem
 boundary. The current storage boundary is implemented for Unix-like systems and
-tested on Linux. Windows accounts without
-a configured identity retain their existing chat behavior, with identity storage
-shown as unavailable. A configured identity cannot be bypassed on Windows; its
-login fails until protected Windows storage is available.
-
-Persistent local keys provide the foundation for peer authentication. Chat
-connections currently retain their existing Yggdrasil transport and do not yet
-negotiate Ed25519 identity proofs. The fingerprint display states this explicitly.
-Manual peer-key pins record a locally selected key for future authentication;
-chat connections do not yet prove possession of it. Following remains separate
-from identity trust and the manual contact allowlist.
+tested on Linux. Accounts with a configured identity fail login if protected
+identity storage is unavailable. Peer connections fail closed when their local
+identity or pin policy cannot be loaded.
 
 The native cryptographic implementation has not been independently security
 audited; constant-time execution and complete memory erasure are not guaranteed.

@@ -798,7 +798,7 @@ barev_my_address(PurplePluginAction *action)
             purple_notify_user_info_add_pair_plaintext(info, _("Ed25519 public key"), identifier);
             purple_notify_user_info_add_pair_plaintext(info, _("Identity fingerprint"), fingerprint);
             purple_notify_user_info_add_pair_plaintext(info, _("Chat authentication"),
-                _("Identity authentication is not yet negotiated on chat connections."));
+                _("New connections to pinned contacts require mutual TLS 1.3 and SASL EXTERNAL."));
         } else {
             purple_notify_user_info_add_pair_plaintext(info, _("Local identity"),
                 _("Protected identity storage is unavailable on this platform."));
@@ -1099,7 +1099,7 @@ bonjour_login_barev(PurpleAccount *account)
           expected, &bd->identity);
       g_free(profile);
       if (result == BAREV_IDENTITY_UNSUPPORTED && !*expected) {
-          purple_debug_warning("barev", "Protected identity storage is unavailable; retaining the existing unauthenticated chat transport.\n");
+          purple_debug_warning("barev", "Protected identity storage is unavailable; peer identity pins cannot be checked.\n");
       } else if (result || !barev_identity_identifier(&bd->identity, identifier)) {
           purple_debug_error("barev", "Identity initialization failed (code %d).\n", result);
           purple_connection_set_protocol_data(gc, NULL);

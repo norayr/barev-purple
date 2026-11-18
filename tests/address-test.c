@@ -185,7 +185,7 @@ int main(int argc, char **argv)
     CHECK(popups == 2 && !g_strcmp0(shown_address, "fixture@ai-e.barev.v6.alt"));
     CHECK(!g_strcmp0(shown_public_key, purple_account_get_string(account, "barev_identity", "")));
     CHECK(shown_fingerprint && strlen(shown_fingerprint) == 71 && g_str_has_prefix(shown_fingerprint, "SHA256:"));
-    CHECK(shown_authentication && strstr(shown_authentication, "not yet negotiated"));
+    CHECK(shown_authentication && strstr(shown_authentication, "pinned contacts require mutual TLS 1.3"));
     purple_plugin_action_free(action); g_list_free(actions);
     path = g_build_filename(g_get_home_dir(), ".purple", "barev-contacts-fixture.conf", NULL);
     CHECK(g_file_get_contents(path, &saved, NULL, NULL));
@@ -201,12 +201,14 @@ int main(int argc, char **argv)
         CHECK(!g_strcmp0(shown_pin_status, NULL));
         ((void (*)(PurpleBlistNode *, gpointer))item->callback)(PURPLE_BLIST_NODE(buddy), item->data); enter_pin(key); approve_pin(0);
         protocol->get_info(gc, purple_buddy_get_name(buddy));
-        CHECK(!shown_peer_key && !g_strcmp0(shown_pin_status, "No pinned key"));
+        CHECK(!shown_peer_key && !g_strcmp0(shown_pin_status, "No pinned key") &&
+            shown_authentication && strstr(shown_authentication, "legacy transport"));
         ((void (*)(PurpleBlistNode *, gpointer))item->callback)(PURPLE_BLIST_NODE(buddy), item->data); enter_pin(key);
-        CHECK(pin_description && strstr(pin_description, "New fingerprint: SHA256:") && strstr(pin_description, key));
+        CHECK(pin_description && strstr(pin_description, "New fingerprint: SHA256:") && strstr(pin_description, key) &&
+            strstr(pin_description, "new connections") && strstr(pin_description, "reconnect"));
         approve_pin(1); protocol->get_info(gc, purple_buddy_get_name(buddy));
         CHECK(!g_strcmp0(shown_peer_key, key) && !g_strcmp0(shown_pin_status, "Manually pinned"));
-        CHECK(buddy_count(account) == count && shown_authentication && strstr(shown_authentication, "not yet negotiated"));
+        CHECK(buddy_count(account) == count && shown_authentication && strstr(shown_authentication, "Required on new connections"));
         ((void (*)(PurpleBlistNode *, gpointer))item->callback)(PURPLE_BLIST_NODE(buddy), item->data); enter_pin(replacement);
         CHECK(strstr(pin_description, "Current fingerprint: SHA256:") && strstr(pin_description, replacement));
         approve_pin(1); protocol->get_info(gc, purple_buddy_get_name(buddy));
