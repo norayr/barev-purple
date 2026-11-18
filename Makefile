@@ -7,6 +7,7 @@ CC      ?= gcc
 endif
 SOURCE_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 CFLAGS  ?= -g -O2
+PYTHON  ?= python3
 WARN    ?= -Wall -Wextra -Wno-unused-parameter
 ifeq ($(OS),Windows_NT)
   PICFLAG ?=
@@ -202,7 +203,7 @@ tests/avatar-cache-test: tests/avatar-cache-test.c avatar-cache.c avatar-cache.h
 
 .PHONY: test-avatar-cache
 test-avatar-cache: $(PLUGIN) tests/avatar-cache-test
-	python3 "$(SOURCE_DIR)/tests/check-avatar-cache.py" "$(CURDIR)/tests/avatar-cache-test" "$(abspath $(PLUGIN))"
+	$(PYTHON) "$(SOURCE_DIR)/tests/check-avatar-cache.py" "$(CURDIR)/tests/avatar-cache-test" "$(abspath $(PLUGIN))"
 
 tests/formatting-test: tests/formatting-test.c jabber.h
 	mkdir -p tests
@@ -210,7 +211,7 @@ tests/formatting-test: tests/formatting-test.c jabber.h
 
 .PHONY: test-formatting
 test-formatting: $(PLUGIN) tests/formatting-test
-	python3 "$(SOURCE_DIR)/tests/check-formatting.py" "$(CURDIR)/tests/formatting-test" "$(abspath $(PLUGIN))"
+	$(PYTHON) "$(SOURCE_DIR)/tests/check-formatting.py" "$(CURDIR)/tests/formatting-test" "$(abspath $(PLUGIN))"
 
 tests/address-test: tests/address-test.c $(wildcard $(SOURCE_DIR)/*.h)
 	mkdir -p tests
@@ -218,7 +219,7 @@ tests/address-test: tests/address-test.c $(wildcard $(SOURCE_DIR)/*.h)
 
 .PHONY: test-addresses
 test-addresses: $(PLUGIN) tests/address-test
-	python3 "$(SOURCE_DIR)/tests/check-addresses.py" "$(CURDIR)/tests/address-test" "$(abspath $(PLUGIN))"
+	$(PYTHON) "$(SOURCE_DIR)/tests/check-addresses.py" "$(CURDIR)/tests/address-test" "$(abspath $(PLUGIN))"
 
 tests/parser-test: tests/parser-test.c parser.c address.c auth-stream.c $(wildcard $(SOURCE_DIR)/*.h)
 	mkdir -p tests
@@ -230,8 +231,8 @@ tests/stream-io-test: tests/stream-io-test.c $(wildcard $(SOURCE_DIR)/*.h)
 	$(CC) $(CFLAGS) -I"$(SOURCE_DIR)" "$(SOURCE_DIR)/tests/stream-io-test.c" -o "$@" $(LDLIBS) $(shell pkg-config --libs gmodule-2.0)
 
 test-parser: $(PLUGIN) tests/parser-test tests/stream-io-test
-	python3 "$(SOURCE_DIR)/tests/check-parser.py" "$(CURDIR)/tests/parser-test" "$(abspath $(PLUGIN))"
-	python3 "$(SOURCE_DIR)/tests/check-parser.py" "$(CURDIR)/tests/stream-io-test" "$(abspath $(PLUGIN))"
+	$(PYTHON) "$(SOURCE_DIR)/tests/check-parser.py" "$(CURDIR)/tests/parser-test" "$(abspath $(PLUGIN))"
+	$(PYTHON) "$(SOURCE_DIR)/tests/check-parser.py" "$(CURDIR)/tests/stream-io-test" "$(abspath $(PLUGIN))"
 
 tests/image-ui-test: tests/image-ui-test.c image-ui.c image-ui.h
 	mkdir -p tests
@@ -243,7 +244,7 @@ tests/image-wire-test: tests/image-wire-test.c image-wire.c image-wire.h
 	$(CC) $(CFLAGS) -I"$(SOURCE_DIR)" "$(SOURCE_DIR)/tests/image-wire-test.c" "$(SOURCE_DIR)/image-wire.c" -o "$@" $(LDLIBS)
 
 test-images: $(PLUGIN) tests/image-ui-test tests/image-wire-test
-	python3 "$(SOURCE_DIR)/tests/check-images.py" "$(CURDIR)/tests/image-ui-test" "$(abspath $(PLUGIN))"
+	$(PYTHON) "$(SOURCE_DIR)/tests/check-images.py" "$(CURDIR)/tests/image-ui-test" "$(abspath $(PLUGIN))"
 	"$(CURDIR)/tests/image-wire-test"
 FORCE:
 
@@ -257,7 +258,7 @@ tests/tls-test: $(SOURCE_DIR)/tests/tls-test.c $(SOURCE_DIR)/tls.c $(SOURCE_DIR)
 
 .PHONY: test-tls
 test-tls: tests/tls-test
-	python3 "$(SOURCE_DIR)/tests/check-tls.py" "$(abspath tests/tls-test)"
+	$(PYTHON) "$(SOURCE_DIR)/tests/check-tls.py" "$(abspath tests/tls-test)"
 
 tests/auth-stream-test: $(SOURCE_DIR)/tests/auth-stream-test.c $(SOURCE_DIR)/auth-stream.c $(SOURCE_DIR)/auth-stream.h
 	mkdir -p tests
@@ -265,7 +266,7 @@ tests/auth-stream-test: $(SOURCE_DIR)/tests/auth-stream-test.c $(SOURCE_DIR)/aut
 
 .PHONY: test-auth-stream
 test-auth-stream: tests/auth-stream-test
-	python3 "$(SOURCE_DIR)/tests/check-auth-stream.py" "$(abspath tests/auth-stream-test)"
+	$(PYTHON) "$(SOURCE_DIR)/tests/check-auth-stream.py" "$(abspath tests/auth-stream-test)"
 
 tests/auth-protocol-host: $(SOURCE_DIR)/tests/auth-protocol-host.c $(wildcard $(SOURCE_DIR)/*.h)
 	mkdir -p tests
@@ -273,11 +274,11 @@ tests/auth-protocol-host: $(SOURCE_DIR)/tests/auth-protocol-host.c $(wildcard $(
 
 .PHONY: test-auth-protocol
 test-auth-protocol: $(PLUGIN) tests/auth-protocol-host
-	python3 "$(SOURCE_DIR)/tests/check-auth-protocol.py" --c "$(abspath tests/auth-protocol-host)" "$(abspath $(PLUGIN))"
+	$(PYTHON) "$(SOURCE_DIR)/tests/check-auth-protocol.py" --c "$(abspath tests/auth-protocol-host)" "$(abspath $(PLUGIN))"
 
 .PHONY: test-identities
 test-identities: tests/identity-test
-	python3 "$(SOURCE_DIR)/tests/check-identities.py" "$(abspath tests/identity-test)"
+	$(PYTHON) "$(SOURCE_DIR)/tests/check-identities.py" "$(abspath tests/identity-test)"
 
 tests/peer-pins-test: $(SOURCE_DIR)/tests/peer-pins-test.c $(SOURCE_DIR)/peer-pins.c $(SOURCE_DIR)/peer-pins.h $(SOURCE_DIR)/address.c
 	mkdir -p tests
@@ -285,7 +286,7 @@ tests/peer-pins-test: $(SOURCE_DIR)/tests/peer-pins-test.c $(SOURCE_DIR)/peer-pi
 
 .PHONY: test-peer-pins
 test-peer-pins: tests/peer-pins-test
-	python3 "$(SOURCE_DIR)/tests/check-peer-pins.py" "$(abspath tests/peer-pins-test)"
+	$(PYTHON) "$(SOURCE_DIR)/tests/check-peer-pins.py" "$(abspath tests/peer-pins-test)"
 
 install: $(PLUGIN)
 	install -d "$(DESTDIR)$(PLUGIN_DIR)"
