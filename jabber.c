@@ -3171,7 +3171,7 @@ bonjour_jabber_close_conversation(BonjourJabberConversation *bconv)
   bonjour_parser_destroy(bconv);
 
   if (bconv->socket >= 0) {
-    if (bconv->sent_stream_start == FULLY_SENT) {
+    if (bconv->sent_stream_start == FULLY_SENT && !bconv->tls) {
       size_t len = strlen(STREAM_END);
       if (send(bconv->socket, STREAM_END, len, MSG_NOSIGNAL) != (gssize)len) {
         purple_debug_info("barev",
@@ -3179,6 +3179,10 @@ bonjour_jabber_close_conversation(BonjourJabberConversation *bconv)
                           g_strerror(errno));
       }
     }
+  }
+
+  barev_tls_free(bconv->tls); bconv->tls = NULL;
+  if (bconv->socket >= 0) {
     close(bconv->socket);
     bconv->socket = -1;
   }

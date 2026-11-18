@@ -77,6 +77,18 @@ cp libbarev.so ~/.purple/plugins
 
 restart pidgin.
 
+## TLS transport tests
+
+The TLS transport adapter links OpenSSL `libssl` and `libcrypto`. Its headless
+tests use disposable identities and local sockets:
+
+```sh
+make test-tls
+```
+
+The test driver requires Python `cryptography` and checks mutual Ed25519
+authentication, exact peer-key pins, partial I/O and failure cleanup.
+
 # Usage
 Because Barev does not do discovery, you must exchange contact details out-of-band.
 

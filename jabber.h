@@ -32,6 +32,7 @@
 
 #include "account.h"
 #include "circbuffer.h"
+#include "tls.h"
 #include "libpurple/server.h"  /* PurpleTypingState */
 
 #define STREAM_END "</stream:stream>"
@@ -66,6 +67,7 @@ typedef struct _BonjourJabberConversation
   gboolean closing;
   gboolean incoming;
   PurpleCircBuffer *tx_buf;
+  BarevTLS *tls;
   int sent_stream_start; /* 0 = Unsent, 1 = Partial, 2 = Complete */
   gboolean recv_stream_start;
   /* TRUE while libxml is dispatching SAX callbacks for this conversation.

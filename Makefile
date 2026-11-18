@@ -59,6 +59,8 @@ IMAGE_CFLAGS   := -I$(W32_GTK_DIR)/include/gdk-pixbuf-2.0
 IMAGE_LIBS     := -L$(W32_GTK_DIR)/lib -lgdk_pixbuf-2.0
 CRYPTO_CFLAGS  ?= -I$(W32_PURPLE_INC)
 CRYPTO_LIBS    ?= -L$(W32_LIBDIR) -lcrypto
+TLS_CFLAGS     ?= $(CRYPTO_CFLAGS)
+TLS_LIBS       ?= -L$(W32_LIBDIR) -lssl
 else
 PURPLE_CFLAGS  := $(shell pkg-config --cflags purple) $(PURPLE_ADDITIONAL)
 PURPLE_LIBS    := $(shell pkg-config --libs purple)
@@ -72,6 +74,8 @@ IMAGE_CFLAGS   := $(shell pkg-config --cflags gdk-pixbuf-2.0)
 IMAGE_LIBS     := $(shell pkg-config --libs gdk-pixbuf-2.0)
 CRYPTO_CFLAGS  := $(shell pkg-config --cflags libcrypto)
 CRYPTO_LIBS    := $(shell pkg-config --libs libcrypto)
+TLS_CFLAGS     := $(shell pkg-config --cflags libssl)
+TLS_LIBS       := $(shell pkg-config --libs libssl)
 endif
 
 # Optional GStreamer / voice-video support.
@@ -117,8 +121,8 @@ CFLAGS += $(WARN) $(PICFLAG) \
           $(PURPLE_CFLAGS) $(GLIB_CFLAGS) $(LIBXML_CFLAGS) $(AVAHI_CFLAGS) \
           -DBAREV_BUILD_ID=\"$(BAREV_BUILD_ID)\"
 
-CFLAGS += $(IMAGE_CFLAGS) $(CRYPTO_CFLAGS)
-LDLIBS  = $(PURPLE_LIBS) $(GLIB_LIBS) $(LIBXML_LIBS) $(AVAHI_LIBS) $(LDLIBS_EXTRA) $(WIN_LIBS) $(IMAGE_LIBS) $(CRYPTO_LIBS)
+CFLAGS += $(IMAGE_CFLAGS) $(CRYPTO_CFLAGS) $(TLS_CFLAGS)
+LDLIBS  = $(PURPLE_LIBS) $(GLIB_LIBS) $(LIBXML_LIBS) $(AVAHI_LIBS) $(LDLIBS_EXTRA) $(WIN_LIBS) $(IMAGE_LIBS) $(TLS_LIBS) $(CRYPTO_LIBS)
 
 PLUGIN  = libbarev.$(EXT)
 
@@ -136,6 +140,7 @@ endif
 SRCS = \
   barev.c \
   identity.c \
+  tls.c \
   identity-store.c \
   peer-pins.c \
   pin-ui.c \
@@ -244,6 +249,14 @@ FORCE:
 tests/identity-test: $(SOURCE_DIR)/tests/identity-test.c $(SOURCE_DIR)/identity.c $(SOURCE_DIR)/identity.h $(SOURCE_DIR)/identity-store.c $(SOURCE_DIR)/identity-store.h
 	mkdir -p tests
 	$(CC) $(CFLAGS) -I"$(SOURCE_DIR)" "$(SOURCE_DIR)/tests/identity-test.c" "$(SOURCE_DIR)/identity.c" "$(SOURCE_DIR)/identity-store.c" -o "$@" $(GLIB_LIBS) $(CRYPTO_LIBS)
+
+tests/tls-test: $(SOURCE_DIR)/tests/tls-test.c $(SOURCE_DIR)/tls.c $(SOURCE_DIR)/tls.h $(SOURCE_DIR)/identity.h
+	mkdir -p tests
+	$(CC) $(CFLAGS) -I"$(SOURCE_DIR)" "$(SOURCE_DIR)/tests/tls-test.c" "$(SOURCE_DIR)/tls.c" -o "$@" $(GLIB_LIBS) $(TLS_LIBS) $(CRYPTO_LIBS)
+
+.PHONY: test-tls
+test-tls: tests/tls-test
+	python3 "$(SOURCE_DIR)/tests/check-tls.py" "$(abspath tests/tls-test)"
 
 .PHONY: test-identities
 test-identities: tests/identity-test
