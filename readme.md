@@ -94,6 +94,12 @@ sequencing, stream restarts and live pinned socket paths using disposable
 profiles. Live checks also cover pre-authentication traffic, corrupt pins,
 contact binding, queued messages and blocked writes.
 
+`make test-security-ui` checks conversation-header states, merged-account
+switching, window recreation and reentrant cleanup using a headless GTK test
+double. Live authentication tests also check the displayed fingerprint policy,
+including pin changes on existing authenticated and legacy connections.
+Visual placement and icon-theme rendering require an interactive Pidgin check.
+
 # Usage
 Because Barev does not do discovery, you must exchange contact details out-of-band.
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Showing live pinned-identity authentication in Pidgin's conversation header,
+  with the captured peer fingerprint in a tooltip. Pending, legacy and closed
+  connections do not display a lock. The optional GTK adapter follows account
+  switching in merged conversations and can be disabled with `PIDGIN_UI=0`.
+
 ## 3.1.1 — 2026-11-11
 
 ### Fixed

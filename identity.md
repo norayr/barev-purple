@@ -68,6 +68,24 @@ authentication. Pin both sides and reconnect to require authenticated chats.
 TLS protects the XML chat stream; separate file-transfer data connections use
 their existing Yggdrasil transport.
 
+### Conversation security indicator
+
+Pidgin's conversation information pane shows a lock and **Pinned identity
+authenticated** only after the active connection completes mutual TLS and SASL
+EXTERNAL. Hover over the indicator to see the authenticated peer fingerprint.
+The fingerprint belongs to the key captured when that connection opened;
+changing a saved pin does not change an existing connection's identity.
+
+Connections which are still opening show **Connecting**. Legacy connections show
+**Unauthenticated**, and closed connections show **Disconnected**, without a lock.
+Switching the active account in a merged conversation updates the indicator.
+The indicator describes the chat stream, not individual message signatures or
+separate file-transfer connections.
+
+The optional adapter builds automatically when Pidgin/GTK 2 development headers
+are available. Use `make PIDGIN_UI=1` to require it or `make PIDGIN_UI=0` to omit
+GTK integration. Other libpurple frontends retain their existing UI.
+
 ## Backup and recovery
 
 Back up the entire profile, including `barev/`, `accounts.xml` and `blist.xml`.
