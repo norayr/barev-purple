@@ -3,6 +3,7 @@
 from pathlib import Path
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 
 TOOLS = [Path(arg).resolve() for arg in sys.argv[1:]]
 STREAM = "http://etherx.jabber.org/streams"
@@ -16,6 +17,16 @@ EXTERNAL = f"<auth xmlns='{SASL}' mechanism='EXTERNAL'>=</auth>"
 SUCCESS = f"<success xmlns='{SASL}'/>"
 FINAL = "<stream:features/>"
 OUTPUTS = {1: TLS_FEATURES, 2: START, 3: PROCEED, 6: EX_FEATURES, 7: EXTERNAL, 8: SUCCESS, 10: FINAL}
+
+
+def tree(text):
+    if not text:
+        return None
+    root = ET.fromstring(f"<root xmlns:stream='{STREAM}'>{text}</root>")
+    assert len(root) == 1
+    def value(item):
+        return item.tag, sorted(item.attrib.items()), item.text or "", [value(child) for child in item]
+    return value(root[0])
 TRACES = {
     "client": [("open", 0), (TLS_FEATURES, 2), ("sent", 0), (PROCEED, 4), ("secure", 5),
                ("open", 0), (EX_FEATURES, 7), ("sent", 0), (SUCCESS, 9), ("open", 0), (FINAL, 11)],
@@ -42,7 +53,8 @@ for tool in TOOLS:
         events = [event for event, _ in trace]
         rows = run(tool, role, events)
         for index, (row, (_, action)) in enumerate(zip(rows, trace)):
-            assert row == (action, int(action == 11), int(index == 3), int(action in OUTPUTS), OUTPUTS.get(action, "")), (tool, role, index, row)
+            assert row[:4] == (action, int(action == 11), int(index == 3), int(action in OUTPUTS)), (tool, role, index, row)
+            assert tree(row[4]) == tree(OUTPUTS.get(action, "")), (tool, role, index, row)
             checks += 1
         for prefix in range(len(trace)+1):
             next_event = trace[prefix][0] if prefix < len(trace) else None
