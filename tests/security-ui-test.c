@@ -24,7 +24,7 @@ static void widget_finalize(GObject *object)
 {
     GtkWidget *widget = (GtkWidget *)object;
     CHECK(!widget->children);
-    g_free(widget->text); g_free(widget->tooltip); --live_widgets;
+    g_free(widget->tooltip); --live_widgets;
     G_OBJECT_CLASS(test_widget_parent_class)->finalize(object);
 }
 static void test_widget_class_init(TestWidgetClass *klass)
@@ -38,8 +38,6 @@ GtkWidget *gtk_hbox_new(gboolean homogeneous, gint spacing)
 { (void)homogeneous; (void)spacing; return g_object_new(test_widget_get_type(), NULL); }
 GtkWidget *gtk_image_new_from_icon_name(const char *name, int size)
 { CHECK(!strcmp(name, "security-high") && size == GTK_ICON_SIZE_MENU); return gtk_hbox_new(FALSE, 0); }
-GtkWidget *gtk_label_new(const char *text)
-{ GtkWidget *widget = gtk_hbox_new(FALSE, 0); widget->text = g_strdup(text); return widget; }
 void gtk_box_pack_start(GtkWidget *parent, GtkWidget *child, gboolean expand, gboolean fill, guint padding)
 { (void)expand; (void)fill; (void)padding; CHECK(!child->parent); child->parent = parent; parent->children = g_list_append(parent->children, child); }
 void gtk_box_pack_end(GtkWidget *parent, GtkWidget *child, gboolean expand, gboolean fill, guint padding)
@@ -47,8 +45,6 @@ void gtk_box_pack_end(GtkWidget *parent, GtkWidget *child, gboolean expand, gboo
 void gtk_widget_set_no_show_all(GtkWidget *widget, gboolean value) { widget->no_show_all = value; }
 void gtk_widget_set_tooltip_text(GtkWidget *widget, const char *text)
 { g_free(widget->tooltip); widget->tooltip = g_strdup(text); }
-void gtk_label_set_text(GtkWidget *widget, const char *text)
-{ g_free(widget->text); widget->text = g_strdup(text); }
 void gtk_widget_show(GtkWidget *widget)
 {
     widget->visible = TRUE;
@@ -97,14 +93,23 @@ static GtkWidget *row(GtkWidget *parent, const char *text)
 {
     GList *item;
     for (item = parent->children; item; item = item->next) {
-        GtkWidget *box = item->data, *label = g_list_nth_data(box->children, 1);
-        if (box->visible && label && !g_strcmp0(label->text, text)) return box;
+        GtkWidget *box = item->data;
+        if (box->visible && box->tooltip && strstr(box->tooltip, text)) return box;
     }
     return NULL;
 }
 static void check_status(GtkWidget *parent, const char *label, gboolean locked)
 {
     GtkWidget *box = row(parent, label), *image;
+    GList *item;
+    for (item = parent->children; item; item = item->next)
+        CHECK(g_list_length(((GtkWidget *)item->data)->children) == 1);
+    if (!locked) {
+        CHECK(box == NULL);
+        show_all(parent);
+        for (item = parent->children; item; item = item->next) CHECK(!((GtkWidget *)item->data)->visible);
+        return;
+    }
     CHECK(box != NULL); image = box->children->data;
     CHECK(image->visible == locked);
     show_all(parent); CHECK(image->visible == locked);
@@ -128,6 +133,7 @@ int main(void)
     purple_signal_register(&pidgin_handle, "conversation-displayed", purple_marshal_VOID__POINTER, NULL, 1, purple_value_new(PURPLE_TYPE_POINTER));
     for (i = 0; i < 3; ++i) CHECK(!BarevSecurityUI_Text(i, fp, &label, tooltip));
     CHECK(BarevSecurityUI_Text(3, fp, &label, tooltip)); CHECK(strstr(tooltip, fp));
+    CHECK(g_str_has_prefix(tooltip, "Pinned identity authenticated\n"));
     CHECK(!BarevSecurityUI_Text(3, "", &label, tooltip));
     CHECK(!BarevSecurityUI_Text(3, "SHA256:<b>fake</b>", &label, tooltip));
     CHECK(!BarevSecurityUI_Text(99, fp, &label, tooltip));

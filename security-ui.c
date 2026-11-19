@@ -12,7 +12,7 @@ gboolean BarevSecurityUI_Text(int state, const char *fingerprint, const char **l
             (fingerprint[i] >= 'a' && fingerprint[i] <= 'f');
     if (state == BAREV_SECURITY_AUTHENTICATED && valid) {
         *label = "Pinned identity authenticated";
-        g_snprintf(tooltip, 384, "Mutual TLS 1.3 · SASL EXTERNAL\nPeer fingerprint: %s\n"
+        g_snprintf(tooltip, 384, "Pinned identity authenticated\nMutual TLS 1.3 · SASL EXTERNAL\nPeer fingerprint: %s\n"
             "Verified against the key pinned when this connection opened.\n"
             "Pin changes apply after reconnecting.\nScope: authenticated chat stream.", fingerprint);
         return TRUE;
@@ -51,22 +51,22 @@ struct BarevSecurityUI {
 };
 struct View {
     BarevSecurityUI *ui;
-    GtkWidget *parent, *box, *image, *label;
+    GtkWidget *parent, *box, *image;
     unsigned refs;
     gboolean shown;
-    char *text, *tooltip;
+    char *tooltip;
 };
 
 static void unref(BarevSecurityUI *ui) { if (!--ui->refs) g_free(ui); }
 static void view_unref(View *view)
-{ if (!--view->refs) { g_free(view->text); g_free(view->tooltip); g_free(view); } }
+{ if (!--view->refs) { g_free(view->tooltip); g_free(view); } }
 
 static void destroyed(GtkWidget *widget, gpointer data)
 {
     View *view = data;
     (void)widget;
     view->ui->views = g_list_remove(view->ui->views, view);
-    view->box = view->image = view->label = view->parent = NULL;
+    view->box = view->image = view->parent = NULL;
     view_unref(view);
 }
 
@@ -81,9 +81,7 @@ static View *view_for(BarevSecurityUI *ui, GtkWidget *parent)
     view = g_new0(View, 1); view->ui = ui; view->refs = 2; view->parent = parent;
     view->box = gtk_hbox_new(FALSE, 4);
     view->image = gtk_image_new_from_icon_name("security-high", GTK_ICON_SIZE_MENU);
-    view->label = gtk_label_new(NULL);
     gtk_box_pack_start(GTK_BOX(view->box), view->image, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(view->box), view->label, FALSE, FALSE, 0);
     gtk_widget_set_no_show_all(view->image, TRUE);
     gtk_widget_set_no_show_all(view->box, TRUE);
     g_signal_connect(view->box, "destroy", G_CALLBACK(destroyed), view);
@@ -120,10 +118,6 @@ void BarevSecurityUI_Update(BarevSecurityUI *ui)
         locked = BarevSecurityUI_Text(state, fingerprint, &label, tooltip);
         view = view_for(ui, gtkconv->infopane_hbox);
         view->shown = TRUE;
-        if (view->label && g_strcmp0(view->text, label)) {
-            g_free(view->text); view->text = g_strdup(label);
-            gtk_label_set_text(GTK_LABEL(view->label), label);
-        }
         if (view->box && g_strcmp0(view->tooltip, tooltip)) {
             g_free(view->tooltip); view->tooltip = g_strdup(tooltip);
             gtk_widget_set_tooltip_text(view->box, tooltip);
@@ -132,8 +126,10 @@ void BarevSecurityUI_Update(BarevSecurityUI *ui)
             if (locked) gtk_widget_show(view->image);
             else gtk_widget_hide(view->image);
         }
-        if (view->label) gtk_widget_show(view->label);
-        if (view->box) gtk_widget_show(view->box);
+        if (view->box) {
+            if (locked) gtk_widget_show(view->box);
+            else gtk_widget_hide(view->box);
+        }
         view_unref(view);
     }
     g_list_free(snapshot);

@@ -70,15 +70,14 @@ their existing Yggdrasil transport.
 
 ### Conversation security indicator
 
-Pidgin's conversation information pane shows a lock and **Pinned identity
-authenticated** only after the active connection completes mutual TLS and SASL
-EXTERNAL. Hover over the indicator to see the authenticated peer fingerprint.
+Pidgin's conversation information pane shows a single shield on the right only
+after the active connection completes mutual TLS and SASL EXTERNAL. Hover over
+the shield to see **Pinned identity authenticated** and the peer fingerprint.
 The fingerprint belongs to the key captured when that connection opened;
 changing a saved pin does not change an existing connection's identity.
 
-Connections which are still opening show **Connecting**. Legacy connections show
-**Unauthenticated**, and closed connections show **Disconnected**, without a lock.
-Switching the active account in a merged conversation updates the indicator.
+Opening, legacy and closed connections do not display the shield. Switching the
+active account in a merged conversation updates the indicator.
 The indicator describes the chat stream, not individual message signatures or
 separate file-transfer connections.
 
