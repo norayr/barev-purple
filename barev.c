@@ -50,6 +50,7 @@
 
 #include <request.h> //for purple_request_fields
 #include "peer-pins.h"
+#include "dbus-api.h"
 #include <blist.h> // for barev
 #include <eventloop.h>
 #include "libpurple/server.h" //for typing notifications
@@ -114,6 +115,25 @@ typedef struct {
 
 static void bonjour_set_status(PurpleAccount *account, PurpleStatus *status);
 static void bonjour_login(PurpleAccount *account);
+
+static BarevDBus *dbus_service;
+static GList *dbus_accounts;
+
+static gboolean dbus_enumerate(void *owner, BarevDBusAddAccount add, void *sink)
+{
+  GList *item;
+  (void)owner;
+  for (item = dbus_accounts; item; item = item->next) {
+    PurpleAccount *account = item->data;
+    PurpleConnection *gc = purple_account_get_connection(account);
+    BonjourData *bd = gc ? purple_connection_get_protocol_data(gc) : NULL;
+    char identity[65];
+    const char *address = bd && bd->jid ? strrchr(bd->jid, '@') : NULL;
+    if (bd && barev_identity_identifier(&bd->identity, identity) &&
+        (!address || !add(sink, identity, purple_account_get_username(account), address + 1))) return FALSE;
+  }
+  return TRUE;
+}
 
 static void bonjour_login_barev(PurpleAccount *account);
 
@@ -1194,7 +1214,9 @@ bonjour_login_barev(PurpleAccount *account)
    * empty blist, making the initial Telepathy contact list empty. */
   bd->images = barev_images_new(account);
   bd->security = BarevSecurityUI_New(account, bonjour_jabber_security, account);
+  dbus_accounts = g_list_prepend(dbus_accounts, account);
   purple_connection_set_state(gc, PURPLE_CONNECTED);
+  BarevDBus_AccountsChanged(dbus_service);
 
 #ifdef USE_VV
   /* Seed Purple's buddy capability cache after Haze is connected. Clients
@@ -1230,6 +1252,9 @@ bonjour_close(PurpleConnection *connection)
 {
   BonjourData *bd = connection->proto_data;
   PurpleAccount *account = purple_connection_get_account(connection);
+
+  dbus_accounts = g_list_remove(dbus_accounts, account);
+  BarevDBus_AccountsChanged(dbus_service);
 
   if (bd && bd->security) {
     BarevSecurityUI *security = bd->security; bd->security = NULL; BarevSecurityUI_Close(security);
@@ -1671,16 +1696,28 @@ bonjour_can_receive_file(PurpleConnection *connection, const char *who)
 }
 
 static gboolean
+plugin_load(PurplePlugin *plugin)
+{
+  (void)plugin;
+  if (!dbus_service) dbus_service = BarevDBus_Start("org.barev.C",
+      BAREV_DBUS_C_PATH, "c", dbus_enumerate, NULL);
+  return TRUE;
+}
+
+static gboolean
 plugin_unload(PurplePlugin *plugin)
 {
+  if (dbus_accounts) return FALSE;
+  BarevDBus_Stop(&dbus_service);
+  if (!BarevDBus_Idle()) return FALSE;
 #ifdef BAREV_DEBUG
   barev_diag_cleanup();
 #endif
 
   /* These shouldn't happen here because they are allocated in _init() */
 
-  g_free(default_firstname);
-  g_free(default_lastname);
+  g_free(default_firstname); default_firstname = NULL;
+  g_free(default_lastname); default_lastname = NULL;
 
   return TRUE;
 }
@@ -1829,7 +1866,7 @@ static PurplePluginInfo info =
   NULL,                                             /**< author         */
   PURPLE_WEBSITE,                                   /**< homepage       */
 
-  NULL,                                             /**< load           */
+  plugin_load,                                      /**< load           */
   plugin_unload,                                    /**< unload         */
   NULL,                                             /**< destroy        */
 

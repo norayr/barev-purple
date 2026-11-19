@@ -8,6 +8,14 @@ endif
 SOURCE_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 CFLAGS  ?= -g -O2
 PYTHON  ?= python3
+DBUS ?= $(if $(filter Windows_NT,$(OS)),0,1)
+ifeq ($(DBUS),1)
+ifeq ($(shell pkg-config --atleast-version=2.54 gio-2.0 && echo yes),)
+$(error GIO 2.54 or newer is required; use DBUS=0 to disable the local interface)
+endif
+DBUS_CFLAGS := $(shell pkg-config --cflags gio-2.0) -DBAREV_DBUS
+DBUS_LIBS := $(shell pkg-config --libs gio-2.0)
+endif
 PIDGIN_UI ?= $(if $(filter Windows_NT,$(OS)),0,$(shell pkg-config --exists pidgin && echo 1 || echo 0))
 ifeq ($(PIDGIN_UI),1)
 SECURITY_UI_CFLAGS := $(shell pkg-config --cflags pidgin) -DBAREV_PIDGIN_UI -Wno-deprecated-declarations
@@ -128,7 +136,7 @@ CFLAGS += $(WARN) $(PICFLAG) \
           -DBAREV_BUILD_ID=\"$(BAREV_BUILD_ID)\"
 
 CFLAGS += $(IMAGE_CFLAGS) $(CRYPTO_CFLAGS) $(TLS_CFLAGS)
-LDLIBS  = $(PURPLE_LIBS) $(GLIB_LIBS) $(LIBXML_LIBS) $(AVAHI_LIBS) $(LDLIBS_EXTRA) $(WIN_LIBS) $(IMAGE_LIBS) $(TLS_LIBS) $(CRYPTO_LIBS) $(SECURITY_UI_LIBS)
+LDLIBS  = $(PURPLE_LIBS) $(GLIB_LIBS) $(LIBXML_LIBS) $(AVAHI_LIBS) $(LDLIBS_EXTRA) $(WIN_LIBS) $(IMAGE_LIBS) $(TLS_LIBS) $(CRYPTO_LIBS) $(SECURITY_UI_LIBS) $(DBUS_LIBS)
 
 PLUGIN  = libbarev.$(EXT)
 
@@ -145,6 +153,7 @@ endif
 
 SRCS = \
   barev.c \
+  dbus-api.c \
   identity.c \
   tls.c \
   auth-stream.c \
@@ -199,6 +208,28 @@ $(PLUGIN): $(OBJS)
 
 security-ui.o: $(SOURCE_DIR)/security-ui.c $(SOURCE_DIR)/security-ui.h FORCE
 	$(CC) $(CFLAGS) $(SECURITY_UI_CFLAGS) -c "$<" -o "$@"
+
+dbus-interface.inc: $(SOURCE_DIR)/dbus-interface.xml $(SOURCE_DIR)/dbus-xml.py
+	$(PYTHON) "$(SOURCE_DIR)/dbus-xml.py" "$<" "$@"
+
+dbus-api.o: $(SOURCE_DIR)/dbus-api.c $(SOURCE_DIR)/dbus-api.h $(if $(filter 1,$(DBUS)),dbus-interface.inc) FORCE
+	$(CC) $(CFLAGS) $(DBUS_CFLAGS) -I"$(CURDIR)" -c "$<" -o "$@"
+
+tests/TestDBus: $(SOURCE_DIR)/tests/TestDBus.c $(SOURCE_DIR)/dbus-api.c $(SOURCE_DIR)/dbus-api.h dbus-interface.inc FORCE
+	mkdir -p tests
+	$(CC) $(CFLAGS) $(LDFLAGS) $(DBUS_CFLAGS) -I"$(SOURCE_DIR)" -I"$(CURDIR)" "$<" "$(SOURCE_DIR)/dbus-api.c" -o "$@" $(DBUS_LIBS)
+
+.PHONY: test-dbus test-dbus-plugin
+test-dbus: tests/TestDBus
+	dbus-run-session -- "$(abspath tests/TestDBus)" "$(SOURCE_DIR)/dbus-interface.xml"
+	DBUS_SESSION_BUS_ADDRESS=unix:path="$(CURDIR)/no-session-bus" "$(abspath tests/TestDBus)" --no-bus
+
+tests/dbus-plugin-host: $(SOURCE_DIR)/tests/dbus-plugin-host.c $(SOURCE_DIR)/barev.h
+	mkdir -p tests
+	$(CC) $(CFLAGS) $(LDFLAGS) -I"$(SOURCE_DIR)" "$<" -o "$@" $(LDLIBS) $(shell pkg-config --libs gmodule-2.0)
+
+test-dbus-plugin: $(PLUGIN) tests/dbus-plugin-host
+	dbus-run-session -- $(PYTHON) "$(SOURCE_DIR)/tests/check-dbus-plugin.py" "$(CURDIR)" --c
 
 tests/security-ui-test: $(SOURCE_DIR)/tests/security-ui-test.c $(SOURCE_DIR)/tests/security-mock/gtkconv.h $(SOURCE_DIR)/security-ui.c $(SOURCE_DIR)/security-ui.h
 	mkdir -p tests
@@ -343,6 +374,6 @@ endif
 	rm -f "$(DESTDIR)$(ICON_DIR)/scalable/barev.svg"
 
 clean:
-	rm -f $(OBJS) $(PLUGIN)
+	rm -f $(OBJS) $(PLUGIN) dbus-interface.inc tests/TestDBus tests/dbus-plugin-host
 docs:
 	pandoc -o barev.pdf barev.md --pdf-engine=xelatex  -V geometry:margin=1in

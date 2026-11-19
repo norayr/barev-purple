@@ -49,7 +49,7 @@ class Host:
         self.errors = tempfile.TemporaryFile(dir=profile)
         env = dict(os.environ, HOME=str(profile), XDG_CONFIG_HOME=str(profile),
                    XDG_CACHE_HOME=str(profile), XDG_DATA_HOME=str(profile), G_DEBUG="fatal-criticals")
-        env.pop("DBUS_SESSION_BUS_ADDRESS", None)
+        env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=" + str(profile) + "/no-session-bus"
         env.update(extra_env or {})
         self.process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                         stderr=self.errors, env=env, pass_fds=pass_fds, bufsize=0)

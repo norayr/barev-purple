@@ -1,0 +1,13 @@
+<node>
+  <interface name="org.barev.Publishing1">
+    <method name="GetInfo">
+      <arg name="version" type="u" direction="out"/>
+      <arg name="implementation" type="s" direction="out"/>
+      <arg name="capabilities" type="as" direction="out"/>
+    </method>
+    <method name="ListAccounts">
+      <arg name="accounts" type="a(sss)" direction="out"/>
+    </method>
+    <signal name="AccountsChanged"/>
+  </interface>
+</node>

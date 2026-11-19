@@ -1,1 +1,4 @@
 w32lib/*.dll.a
+/dbus-interface.inc
+/tests/TestDBus
+/tests/dbus-plugin-host

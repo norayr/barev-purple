@@ -21,6 +21,10 @@ You need Pidgin (libpurple) development headers and common build tools.
 GStreamer and Farstream development headers are required to build voice/video
 support.
 
+The Linux [local D-Bus interface](dbus.md) uses GIO 2.54 or newer and Python 3
+at build time. GIO is part of GLib; Pidgin's own D-Bus option is independent.
+Use `DBUS=0` to disable this interface. It is disabled by default on Windows.
+
 ## Dependencies
 
 On Gentoo: net-im/pidgin, dev-libs/libxml2, dev-libs/openssl (1.1.1 or newer)
@@ -29,7 +33,7 @@ On Debian and derivatives, install the build dependencies with:
 
 ```sh
 sudo apt install build-essential pkg-config libpurple-dev libglib2.0-dev \
-  libxml2-dev libssl-dev libgstreamer1.0-dev libfarstream-0.2-dev
+  libxml2-dev libssl-dev libgstreamer1.0-dev libfarstream-0.2-dev python3
 ```
 
 For voice/video at runtime, the usual GStreamer plugins are recommended:
