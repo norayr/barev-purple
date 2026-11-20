@@ -32,7 +32,9 @@ prevent chat accounts from connecting.
 
 `GetInfo() → (u version, s implementation, as capabilities)` returns interface
 version `1`, the implementation identifier above and supported capabilities.
-The current capability list contains only `accounts`.
+`accounts` advertises discovery. `local-posts` is added only when the host attaches
+a publishing backend. Both production plugins currently advertise `accounts`;
+the publishing transport is exercised through standalone backend fixtures.
 
 `ListAccounts() → a(sss) accounts` returns connected accounts. Each row contains:
 
@@ -51,9 +53,68 @@ before the initial read. Signals are invalidation hints, not a persistent event
 log. Watch the service's name owner and discard session state when it changes;
 after reconnecting, subscribe and retrieve a fresh snapshot.
 
-The current interface supplies account discovery. Publishing, following, cached
-posts, unread counts and discussions require additional backend operations and
-are not advertised as capabilities yet.
+## Capability-gated local posts
+
+Clients check for `local-posts` before using these methods. Calls without an
+attached backend return `org.barev.Publishing1.NotSupported`. Account IDs are
+64 lowercase hexadecimal characters; each operation targets one connected local
+account. An implementation must retire pending work when that account closes.
+
+| Method | Inputs | Outputs |
+| --- | --- | --- |
+| `GetPublishingState` | `s account` | `s state` |
+| `InitializePublishing` | `s account` | none |
+| `ListDestinations` | `s account` | `a(ssu) destinations` |
+| `CreateDestination` | `s account, s node, s title, u model, as names` | none |
+| `Publish` | `s account, s node, s token, s title, s text, s parent` | `s item, s id` |
+| `ListPosts` | `s account, s node, s cursor, u maximum` | `a(ssssssss) posts, s next` |
+| `GetPost` | `s account, s node, s item` | `(ssssssss) post` |
+
+State labels describe backend availability, such as `loading`, `uninitialized`,
+`ready` and `unavailable`. Initialization is an explicit first-setup operation;
+missing established history requires recovery rather than silent reinitialization.
+Destination rows contain node ID, display title and access model: `1` for open,
+`2` for roster and `3` for whitelist. Audience names are interpreted and validated
+by the backend according to that model.
+
+Post tuples contain PubSub item ID, Atom ID, author, title, text, published time,
+updated time and parent Atom ID, in that order. The backend binds the publication
+token to durable IDs, generates author/timestamp metadata and applies audience
+and Atom wire-budget checks.
+An empty parent denotes a root post. A parent reference requires authenticated
+audience context before a reply can be accepted.
+
+Before publishing, clients retain a fresh canonical UUIDv4 token represented as
+32 lowercase hexadecimal digits without hyphens. Retries reuse that token and
+the same destination/title/text/parent. The backend derives the item and Atom IDs
+from the token and returns an already committed matching publication without
+creating a second post. Reusing a token for different content or a retracted ID
+is a conflict. This contract lets a client resolve an uncertain save or lost
+reply by reloading the token's retained identity before retrying.
+
+List requests contain at most 32 posts per page. An empty cursor begins a page
+sequence, and an empty `next` marks its end. Cursor strings are opaque and at
+most 64 bytes. Backends bind cursors to the account and destination and reject
+stale cursors after committed changes. Destination lists contain at most 16 rows.
+Malformed backend rows fail the whole response rather than returning partial data.
+
+Titles, text, author addresses, item IDs and Atom references retain the backend's
+byte bounds: 256, 16,384, 384, 128 and 1,024 respectively. Audience lists contain
+at most 128 names, each at most 384 bytes. Input parameters are bounded to 64 KiB
+and result-row text to 1 MiB per call. The application backend supplies syntax and
+authorization checks beyond these transport limits.
+
+`PublishingChanged(s account)` invalidates local destination/post snapshots.
+Subscribe before reading, and reload snapshots after a hint. Hosts emit the hint
+only after a durable operation completes successfully. Methods report mutation
+success after checkpoint completion; acceptance into a worker queue is pending
+work. This capability covers durable local storage. Remote PubSub delivery and
+following require service-side integration.
+
+Application errors use the `org.barev.Publishing1` prefix and the names
+`InvalidArgument`, `Denied`, `NotFound`, `Conflict`, `Full`, `Stale`, `StorageError`,
+`Changed`, `WireFull`, `Unavailable` and `Busy`. After an uncertain storage failure,
+inspect reloaded retained IDs and revisions before retrying a publication.
 
 ## Desktop trust and lifecycle
 
@@ -68,6 +129,24 @@ and detaches backend callbacks before shutdown. Hosts must keep the context aliv
 until `BarevDBus_Idle()` reports that GIO has released all adapter callbacks.
 Plugin unloading is deferred while those callbacks remain reachable. Losing the
 bus does not terminate the host.
+
+Publishing dispatch receives plain C request/post records, independently of
+GVariant and widget types. It owns a `BarevDBusCall` until `BarevDBus_Release`,
+including when a request is deferred. Request strings remain valid until release;
+added result rows are copied. `BarevDBus_Complete` consumes a reply once, returning
+whether that completion was accepted, including error replies.
+
+There are at most 32 retained calls per service and eight per client bus name.
+Completed calls still count until the backend releases them. All dispatch,
+result, attach/detach and lifecycle operations belong to the service's owning
+thread and default main context.
+
+Backend detachment, bus loss and shutdown abort pending replies as `Unavailable`
+and prevent late success replies. They retain backend-owned call handles until
+release, so `BarevDBus_Idle` remains false while backend work can still reach the
+adapter. Account retirement must finish or abandon its backend operations and
+release those handles. Module unloading also waits for any background file work
+to drain.
 
 ## Inspection
 
@@ -90,3 +169,10 @@ and separately exercise an unavailable bus. They do not use the desktop bus.
 Run `make dbus-plugin-test` in the Oberon repository or `make test-dbus-plugin`
 in the C repository for account discovery, reconnection and name collisions
 through isolated plugin hosts.
+
+Run `make dbus-publishing-test` in the Oberon repository or
+`make test-dbus-publishing` in the C repository for capability gating, typed
+requests/results, byte/row bounds, deferred request ownership, queue limits,
+error replies, change hints, backend detachment and retained-call shutdown.
+These tests use standalone backend fixtures on a disposable bus; they do not
+enable production publishing or contact peers.

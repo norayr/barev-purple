@@ -8,6 +8,51 @@
     <method name="ListAccounts">
       <arg name="accounts" type="a(sss)" direction="out"/>
     </method>
+    <method name="GetPublishingState">
+      <arg name="account" type="s" direction="in"/>
+      <arg name="state" type="s" direction="out"/>
+    </method>
+    <method name="InitializePublishing">
+      <arg name="account" type="s" direction="in"/>
+    </method>
+    <method name="ListDestinations">
+      <arg name="account" type="s" direction="in"/>
+      <arg name="destinations" type="a(ssu)" direction="out"/>
+    </method>
+    <method name="CreateDestination">
+      <arg name="account" type="s" direction="in"/>
+      <arg name="node" type="s" direction="in"/>
+      <arg name="title" type="s" direction="in"/>
+      <arg name="model" type="u" direction="in"/>
+      <arg name="names" type="as" direction="in"/>
+    </method>
+    <method name="Publish">
+      <arg name="account" type="s" direction="in"/>
+      <arg name="node" type="s" direction="in"/>
+      <arg name="token" type="s" direction="in"/>
+      <arg name="title" type="s" direction="in"/>
+      <arg name="text" type="s" direction="in"/>
+      <arg name="parent" type="s" direction="in"/>
+      <arg name="item" type="s" direction="out"/>
+      <arg name="id" type="s" direction="out"/>
+    </method>
+    <method name="ListPosts">
+      <arg name="account" type="s" direction="in"/>
+      <arg name="node" type="s" direction="in"/>
+      <arg name="cursor" type="s" direction="in"/>
+      <arg name="maximum" type="u" direction="in"/>
+      <arg name="posts" type="a(ssssssss)" direction="out"/>
+      <arg name="next" type="s" direction="out"/>
+    </method>
+    <method name="GetPost">
+      <arg name="account" type="s" direction="in"/>
+      <arg name="node" type="s" direction="in"/>
+      <arg name="item" type="s" direction="in"/>
+      <arg name="post" type="(ssssssss)" direction="out"/>
+    </method>
     <signal name="AccountsChanged"/>
+    <signal name="PublishingChanged">
+      <arg name="account" type="s"/>
+    </signal>
   </interface>
 </node>

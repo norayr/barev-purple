@@ -224,6 +224,14 @@ test-dbus: tests/TestDBus
 	dbus-run-session -- "$(abspath tests/TestDBus)" "$(SOURCE_DIR)/dbus-interface.xml"
 	DBUS_SESSION_BUS_ADDRESS=unix:path="$(CURDIR)/no-session-bus" "$(abspath tests/TestDBus)" --no-bus
 
+tests/TestDBusPosts: $(SOURCE_DIR)/tests/TestDBusPosts.c $(SOURCE_DIR)/dbus-api.c $(SOURCE_DIR)/dbus-api.h dbus-interface.inc FORCE
+	mkdir -p tests
+	$(CC) $(CFLAGS) $(LDFLAGS) -std=c11 -Wall -Wextra -Werror $(DBUS_CFLAGS) -I"$(SOURCE_DIR)" -I"$(CURDIR)" "$<" "$(SOURCE_DIR)/dbus-api.c" -o "$@" $(DBUS_LIBS)
+
+.PHONY: test-dbus-publishing
+test-dbus-publishing: tests/TestDBusPosts
+	dbus-run-session -- "$(abspath tests/TestDBusPosts)"
+
 tests/dbus-plugin-host: $(SOURCE_DIR)/tests/dbus-plugin-host.c $(SOURCE_DIR)/barev.h
 	mkdir -p tests
 	$(CC) $(CFLAGS) $(LDFLAGS) -I"$(SOURCE_DIR)" "$<" -o "$@" $(LDLIBS) $(shell pkg-config --libs gmodule-2.0)

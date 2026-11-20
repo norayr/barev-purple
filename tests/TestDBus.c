@@ -169,7 +169,7 @@ int main(int argc, char **argv)
         BAREV_DBUS_INTERFACE, "GetInfo", g_variant_new("(s)", "unexpected"));
     CHECK(!result && g_error_matches(call_error, G_DBUS_ERROR, G_DBUS_ERROR_INVALID_ARGS));
     result = call(connection, "org.barev.Native", BAREV_DBUS_NATIVE_PATH,
-        BAREV_DBUS_INTERFACE, "Publish", NULL);
+        BAREV_DBUS_INTERFACE, "UnknownOperation", NULL);
     CHECK(!result && g_error_matches(call_error, G_DBUS_ERROR, G_DBUS_ERROR_UNKNOWN_METHOD));
     CHECK(g_file_get_contents(argv[1], &xml, NULL, &error));
     expected = g_dbus_node_info_new_for_xml(xml, &error); CHECK(expected && !error); g_free(xml);
