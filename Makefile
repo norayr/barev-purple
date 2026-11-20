@@ -344,6 +344,14 @@ tests/PostIOHost: $(SOURCE_DIR)/tests/PostIOHost.c $(SOURCE_DIR)/post-io.c $(SOU
 test-post-io: tests/PostIOHost
 	$(PYTHON) "$(SOURCE_DIR)/tests/check-post-io.py" "$(abspath tests/PostIOHost)"
 
+tests/feed-access-test: $(SOURCE_DIR)/tests/feed-access-test.c $(SOURCE_DIR)/feed-access.c $(SOURCE_DIR)/feed-access.h $(SOURCE_DIR)/address.c $(SOURCE_DIR)/address.h
+	mkdir -p tests
+	$(CC) $(CFLAGS) $(LDFLAGS) -std=c11 -Werror $(PURPLE_CFLAGS) $(GLIB_CFLAGS) -I"$(SOURCE_DIR)" "$<" "$(SOURCE_DIR)/feed-access.c" "$(SOURCE_DIR)/address.c" -o "$@" $(GLIB_LIBS)
+
+.PHONY: test-feed-access
+test-feed-access: tests/feed-access-test
+	"$(abspath tests/feed-access-test)"
+
 tests/peer-pins-test: $(SOURCE_DIR)/tests/peer-pins-test.c $(SOURCE_DIR)/peer-pins.c $(SOURCE_DIR)/peer-pins.h $(SOURCE_DIR)/address.c
 	mkdir -p tests
 	$(CC) $(CFLAGS) -I"$(SOURCE_DIR)" "$(SOURCE_DIR)/tests/peer-pins-test.c" "$(SOURCE_DIR)/peer-pins.c" "$(SOURCE_DIR)/address.c" -o "$@" $(LDLIBS)
