@@ -328,6 +328,14 @@ test-auth-protocol: $(PLUGIN) tests/auth-protocol-host
 test-identities: tests/identity-test
 	$(PYTHON) "$(SOURCE_DIR)/tests/check-identities.py" "$(abspath tests/identity-test)"
 
+tests/PostIOHost: $(SOURCE_DIR)/tests/PostIOHost.c $(SOURCE_DIR)/post-io.c $(SOURCE_DIR)/post-io.h $(SOURCE_DIR)/identity-store.c $(SOURCE_DIR)/identity-store.h
+	mkdir -p tests
+	$(CC) $(CFLAGS) $(LDFLAGS) -std=c11 -Werror $(GLIB_CFLAGS) -I"$(SOURCE_DIR)" "$<" "$(SOURCE_DIR)/post-io.c" "$(SOURCE_DIR)/identity-store.c" -o "$@" $(GLIB_LIBS) -Wl,--wrap=read,--wrap=__read_chk,--wrap=write,--wrap=fsync,--wrap=close,--wrap=renameat
+
+.PHONY: test-post-io
+test-post-io: tests/PostIOHost
+	$(PYTHON) "$(SOURCE_DIR)/tests/check-post-io.py" "$(abspath tests/PostIOHost)"
+
 tests/peer-pins-test: $(SOURCE_DIR)/tests/peer-pins-test.c $(SOURCE_DIR)/peer-pins.c $(SOURCE_DIR)/peer-pins.h $(SOURCE_DIR)/address.c
 	mkdir -p tests
 	$(CC) $(CFLAGS) -I"$(SOURCE_DIR)" "$(SOURCE_DIR)/tests/peer-pins-test.c" "$(SOURCE_DIR)/peer-pins.c" "$(SOURCE_DIR)/address.c" -o "$@" $(LDLIBS)
