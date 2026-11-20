@@ -29,4 +29,5 @@ BAREV_POST_IO_LOCAL int32_t BarevPostIO_Copy(int32_t handle, unsigned char *byte
 BAREV_POST_IO_LOCAL void BarevPostIO_Release(int32_t handle);
 BAREV_POST_IO_LOCAL void BarevPostIO_Stop(void);
 BAREV_POST_IO_LOCAL int32_t BarevPostIO_Idle(void);
+BAREV_POST_IO_LOCAL int32_t BarevPostIO_ProfileBusy(const char *profile);
 #endif

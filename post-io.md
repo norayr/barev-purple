@@ -24,6 +24,12 @@ private-profile directory lock. `Replace` performs an exact-byte conditional
 replacement under that same lock. An expected length of `-1` means an absent
 file; a length of zero means an existing empty file.
 
+`ProfileBusy` reports unfinished jobs for a profile on the owning thread,
+including abandoned jobs still performing I/O. It normalizes trailing slashes
+like submission and ignores completed jobs whose results remain retained. Hosts
+can defer same-profile identity loading without blocking the main context. This
+is a scheduling hint; filesystem locking still decides cross-process contention.
+
 The replacement succeeds when the current bytes equal the expected image or
 already equal the replacement image. Otherwise it returns `changed`. A current
 file exceeding the image bound is rejected. Symlinks and nonregular checkpoint

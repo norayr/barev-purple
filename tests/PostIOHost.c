@@ -269,13 +269,14 @@ int main(int argc, char **argv)
         while (g_main_context_iteration(NULL, FALSE)) {} g_usleep(1000);
     }
     CHECK(beats >= 3 && g_atomic_int_get(&blocked)); CHECK(BarevPostIO_Status(handle) == BAREV_POST_IO_PENDING);
+    CHECK(BarevPostIO_ProfileBusy(profile)); CHECK(!BarevPostIO_ProfileBusy(outside));
     CHECK(BarevPostIO_Length(handle) == -1); CHECK(!BarevPostIO_Idle());
     output[0] = 42;
     CHECK(BarevPostIO_Copy(handle, output, sizeof(output)) == -1 && output[0] == 42);
     memset(next, 0, sizeof(next));
     g_mutex_lock(&mutex); opened = TRUE; g_cond_broadcast(&condition); g_mutex_unlock(&mutex);
     g_atomic_int_set(&gate, 0);
-    CHECK(finish(handle) == BAREV_POST_IO_OKAY); BarevPostIO_Release(handle);
+    CHECK(finish(handle) == BAREV_POST_IO_OKAY); CHECK(!BarevPostIO_ProfileBusy(profile)); BarevPostIO_Release(handle);
     for (i = 0; i < sizeof(next); ++i) next[i] = (unsigned char)(255-i);
     CHECK(contents(path, next, sizeof(next))); CHECK(g_source_remove(timer));
 
@@ -296,10 +297,13 @@ int main(int argc, char **argv)
     while (!g_atomic_int_get(&blocked) && g_get_monotonic_time() < deadline) g_usleep(1000);
     CHECK(g_atomic_int_get(&blocked));
     BarevPostIO_Release(handle); CHECK(BarevPostIO_Status(handle) == BAREV_POST_IO_INVALID);
+    CHECK(BarevPostIO_ProfileBusy(profile));
     BarevPostIO_Stop(); CHECK(!BarevPostIO_Idle()); CHECK(!BarevPostIO_Start());
+    CHECK(BarevPostIO_ProfileBusy(profile));
     CHECK(!BarevPostIO_Read(profile, owner));
     g_mutex_lock(&mutex); opened = TRUE; g_cond_broadcast(&condition); g_mutex_unlock(&mutex);
     g_atomic_int_set(&gate, 0); CHECK(drain());
+    CHECK(!BarevPostIO_ProfileBusy(profile));
     CHECK(contents(path, before, sizeof(before)));
     for (i = 0; i < 16; ++i) {
         CHECK(BarevPostIO_Start()); handle = BarevPostIO_Read(profile, owner);

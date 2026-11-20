@@ -287,3 +287,19 @@ int32_t BarevPostIO_Idle(void)
     if (pool) { g_thread_pool_free(pool, FALSE, TRUE); pool = NULL; }
     return 1;
 }
+
+int32_t BarevPostIO_ProfileBusy(const char *profile)
+{
+    size_t length;
+    unsigned i;
+    if (!owned() || !profile) return 0;
+    length = strnlen(profile, 3801);
+    if (length > 3800) return 0;
+    while (length > 1 && profile[length-1] == '/') --length;
+    for (i = 0; i < G_N_ELEMENTS(slots); ++i) {
+        Job *job = slots[i].job;
+        if (job && !g_atomic_int_get(&job->done) && strlen(job->profile) == length &&
+            !memcmp(job->profile, profile, length)) return 1;
+    }
+    return 0;
+}
