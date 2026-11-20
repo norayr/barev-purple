@@ -33,8 +33,9 @@ prevent chat accounts from connecting.
 `GetInfo() → (u version, s implementation, as capabilities)` returns interface
 version `1`, the implementation identifier above and supported capabilities.
 `accounts` advertises discovery. `local-posts` is added only when the host attaches
-a publishing backend. Both production plugins currently advertise `accounts`;
-the publishing transport is exercised through standalone backend fixtures.
+a publishing backend. The Oberon plugin supplies a durable account backend and
+advertises `accounts` and `local-posts`. The C plugin advertises `accounts` while
+its publishing backend is pending; its publishing methods return `NotSupported`.
 
 `ListAccounts() → a(sss) accounts` returns connected accounts. Each row contains:
 
@@ -64,15 +65,20 @@ account. An implementation must retire pending work when that account closes.
 | --- | --- | --- |
 | `GetPublishingState` | `s account` | `s state` |
 | `InitializePublishing` | `s account` | none |
+| `ReloadPublishing` | `s account` | none |
 | `ListDestinations` | `s account` | `a(ssu) destinations` |
 | `CreateDestination` | `s account, s node, s title, u model, as names` | none |
 | `Publish` | `s account, s node, s token, s title, s text, s parent` | `s item, s id` |
 | `ListPosts` | `s account, s node, s cursor, u maximum` | `a(ssssssss) posts, s next` |
 | `GetPost` | `s account, s node, s item` | `(ssssssss) post` |
 
-State labels describe backend availability, such as `loading`, `uninitialized`,
-`ready` and `unavailable`. Initialization is an explicit first-setup operation;
+State labels are `loading`, `uninitialized`, `ready`, `saving` and `unavailable`.
+Committed posts remain readable while a candidate is `saving`; another mutation
+returns `Busy`. Initialization is an explicit first-setup operation;
 missing established history requires recovery rather than silent reinitialization.
+`ReloadPublishing` asynchronously reloads and validates the account checkpoint,
+invalidating previous cursors. After a storage failure, reload before inspecting
+retained IDs or retrying a write. Reloading does not initialize missing history.
 Destination rows contain node ID, display title and access model: `1` for open,
 `2` for roster and `3` for whitelist. Audience names are interpreted and validated
 by the backend according to that model.
@@ -94,8 +100,11 @@ reply by reloading the token's retained identity before retrying.
 
 List requests contain at most 32 posts per page. An empty cursor begins a page
 sequence, and an empty `next` marks its end. Cursor strings are opaque and at
-most 64 bytes. Backends bind cursors to the account and destination and reject
-stale cursors after committed changes. Destination lists contain at most 16 rows.
+most 64 bytes. The native backend binds cursors to the account, client unique bus
+name and destination, rotates them after each page, and rejects stale cursors
+after committed changes or reloads. Each account permits 16 cursors, expiring
+after 300 seconds. Keep one bus connection for a page sequence; separate command
+processes cannot advance one another's cursors. Destination lists contain at most 16 rows.
 Malformed backend rows fail the whole response rather than returning partial data.
 
 Titles, text, author addresses, item IDs and Atom references retain the backend's
@@ -106,7 +115,8 @@ authorization checks beyond these transport limits.
 
 `PublishingChanged(s account)` invalidates local destination/post snapshots.
 Subscribe before reading, and reload snapshots after a hint. Hosts emit the hint
-only after a durable operation completes successfully. Methods report mutation
+only after a durable mutation completes successfully. Loads, reloads, failed
+writes and exact publication retries emit no mutation hint. Methods report mutation
 success after checkpoint completion; acceptance into a worker queue is pending
 work. This capability covers durable local storage. Remote PubSub delivery and
 following require service-side integration.
@@ -135,6 +145,8 @@ GVariant and widget types. It owns a `BarevDBusCall` until `BarevDBus_Release`,
 including when a request is deferred. Request strings remain valid until release;
 added result rows are copied. `BarevDBus_Complete` consumes a reply once, returning
 whether that completion was accepted, including error replies.
+`request.client` is the transport-supplied unique sender name, valid until release;
+it is suitable for binding cursors without accepting a caller-chosen identity.
 
 There are at most 32 retained calls per service and eight per client bus name.
 Completed calls still count until the backend releases them. All dispatch,
@@ -174,5 +186,11 @@ Run `make dbus-publishing-test` in the Oberon repository or
 `make test-dbus-publishing` in the C repository for capability gating, typed
 requests/results, byte/row bounds, deferred request ownership, queue limits,
 error replies, change hints, backend detachment and retained-call shutdown.
-These tests use standalone backend fixtures on a disposable bus; they do not
-enable production publishing or contact peers.
+These tests use standalone backend fixtures on a disposable bus.
+
+Run `make dbus-publishing-plugin-test` in the Oberon repository for the connected
+account backend. A disposable plugin host checks initialization, persisted setup
+markers, Unicode posts, retry identity, private-reply isolation, paging, mutation
+hints, lock failures, explicit reload and disconnect with a pending save. Accepted
+writes may finish after disconnect; reconnect reloads them without reviving the
+retired call. These fixtures do not contact configured peers.

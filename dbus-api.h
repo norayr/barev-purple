@@ -10,11 +10,14 @@
 
 typedef struct BarevDBus BarevDBus;
 typedef struct BarevDBusCall BarevDBusCall;
+enum { BAREV_DBUS_OKAY, BAREV_DBUS_INVALID, BAREV_DBUS_DENIED, BAREV_DBUS_MISSING,
+       BAREV_DBUS_CONFLICT, BAREV_DBUS_FULL, BAREV_DBUS_STALE, BAREV_DBUS_STORAGE_ERROR,
+       BAREV_DBUS_CHANGED, BAREV_DBUS_WIRE_FULL, BAREV_DBUS_UNAVAILABLE, BAREV_DBUS_PENDING, BAREV_DBUS_BUSY };
 enum { BAREV_DBUS_STATE = 1, BAREV_DBUS_INITIALIZE, BAREV_DBUS_DESTINATIONS,
-       BAREV_DBUS_CREATE, BAREV_DBUS_PUBLISH, BAREV_DBUS_POSTS, BAREV_DBUS_POST };
+       BAREV_DBUS_CREATE, BAREV_DBUS_PUBLISH, BAREV_DBUS_POSTS, BAREV_DBUS_POST, BAREV_DBUS_RELOAD };
 typedef struct {
     unsigned method;
-    const char *account, *node, *token, *title, *text, *parent, *cursor, *item;
+    const char *account, *client, *node, *token, *title, *text, *parent, *cursor, *item;
     const char **names;
     uint32_t model, maximum;
     size_t name_count;

@@ -15,6 +15,9 @@
     <method name="InitializePublishing">
       <arg name="account" type="s" direction="in"/>
     </method>
+    <method name="ReloadPublishing">
+      <arg name="account" type="s" direction="in"/>
+    </method>
     <method name="ListDestinations">
       <arg name="account" type="s" direction="in"/>
       <arg name="destinations" type="a(ssu)" direction="out"/>

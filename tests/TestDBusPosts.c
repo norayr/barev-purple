@@ -26,6 +26,7 @@ static void dispatch(void *owner, const BarevDBusRequest *request, BarevDBusCall
         "2026-11-20T00:00:00Z", "2026-11-20T00:00:01Z", "urn:parent:1"};
     unsigned i;
     CHECK(owner == &dispatched); CHECK(!strcmp(request->account, identity)); ++dispatched;
+    CHECK(request->client && request->client[0] == ':');
     if (mode == 1) {
         CHECK(held_count < G_N_ELEMENTS(held)); held[held_count] = call;
         retained[held_count++] = request; return;
@@ -33,7 +34,8 @@ static void dispatch(void *owner, const BarevDBusRequest *request, BarevDBusCall
     if (mode == 2) { CHECK(BarevDBus_Complete(call, 2, NULL, NULL)); BarevDBus_Release(call); return; }
     switch (request->method) {
     case BAREV_DBUS_STATE: CHECK(BarevDBus_Complete(call, 0, "ready", NULL)); break;
-    case BAREV_DBUS_INITIALIZE: CHECK(BarevDBus_Complete(call, 0, NULL, NULL)); break;
+    case BAREV_DBUS_INITIALIZE: case BAREV_DBUS_RELOAD:
+        CHECK(BarevDBus_Complete(call, 0, NULL, NULL)); break;
     case BAREV_DBUS_CREATE:
         CHECK(request->model == 3 && request->name_count == 1);
         CHECK(!strcmp(request->names[0], "reader@200::2"));
@@ -142,6 +144,7 @@ int main(void)
     watch = g_bus_watch_name_on_connection(connection, "org.barev.Native", G_BUS_NAME_WATCHER_FLAGS_NONE,
         appeared, NULL, NULL, NULL); g_main_loop_run(loop); g_bus_unwatch_name(watch);
     call(connection, "GetPublishingState", g_variant_new("(s)", identity)); error_is("NotSupported");
+    call(connection, "ReloadPublishing", g_variant_new("(s)", identity)); error_is("NotSupported");
     BarevDBus_SetPublishing(service, dispatch, &dispatched);
     result = call(connection, "GetInfo", NULL); CHECK(result && !call_error);
     rows = g_variant_get_child_value(result, 2); CHECK(g_variant_n_children(rows) == 2);
@@ -151,6 +154,7 @@ int main(void)
     g_variant_get(result, "(&s)", &value); CHECK(!strcmp(value, "ready")); g_variant_unref(result);
     result = call(connection, "InitializePublishing", g_variant_new("(s)", identity)); CHECK(result && !call_error);
     CHECK(g_variant_is_of_type(result, G_VARIANT_TYPE("()"))); g_variant_unref(result);
+    result = call(connection, "ReloadPublishing", g_variant_new("(s)", identity)); CHECK(result && !call_error); g_variant_unref(result);
     result = call(connection, "CreateDestination", g_variant_new("(sssu^as)", identity, "selected", "Selected", 3u, names));
     CHECK(result && !call_error); g_variant_unref(result);
     result = call(connection, "ListDestinations", g_variant_new("(s)", identity)); CHECK(result && !call_error);

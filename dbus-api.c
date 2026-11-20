@@ -144,7 +144,7 @@ gboolean BarevDBus_Complete(BarevDBusCall *call, unsigned status, const char *fi
     case BAREV_DBUS_STATE:
         if (text(first, 32, FALSE)) result = g_variant_new("(s)", first);
         break;
-    case BAREV_DBUS_INITIALIZE: case BAREV_DBUS_CREATE:
+    case BAREV_DBUS_INITIALIZE: case BAREV_DBUS_CREATE: case BAREV_DBUS_RELOAD:
         result = g_variant_new("()"); break;
     case BAREV_DBUS_PUBLISH:
         if (text(first, 128, FALSE) && text(second, 1024, FALSE)) result = g_variant_new("(ss)", first, second);
@@ -185,7 +185,7 @@ static gboolean parse_request(BarevDBusCall *call)
     BarevDBusRequest *r = &call->request;
     size_t i;
     switch (r->method) {
-    case BAREV_DBUS_STATE: case BAREV_DBUS_INITIALIZE: case BAREV_DBUS_DESTINATIONS:
+    case BAREV_DBUS_STATE: case BAREV_DBUS_INITIALIZE: case BAREV_DBUS_DESTINATIONS: case BAREV_DBUS_RELOAD:
         g_variant_get(call->parameters, "(&s)", &r->account); break;
     case BAREV_DBUS_CREATE:
         g_variant_get(call->parameters, "(&s&s&su@as)", &r->account, &r->node, &r->title, &r->model, &call->names);
@@ -231,7 +231,8 @@ static void publishing_call(BarevDBus *service, unsigned method, const char *sen
     }
     call = g_new0(BarevDBusCall, 1); call->service = service; ++service->refs;
     call->parameters = g_variant_ref(parameters); call->invocation = g_object_ref(invocation);
-    call->sender = g_strdup(sender); call->request.method = method; call->valid = TRUE;
+    call->sender = g_strdup(sender); call->request.client = call->sender;
+    call->request.method = method; call->valid = TRUE;
     service->calls = g_list_prepend(service->calls, call);
     if (!parse_request(call)) { error_call(call, "InvalidArgument"); BarevDBus_Release(call); return; }
     if (method == BAREV_DBUS_DESTINATIONS || method == BAREV_DBUS_POSTS || method == BAREV_DBUS_POST) {
@@ -293,6 +294,7 @@ static void method_call(GDBusConnection *connection, const char *sender, const c
     else if (!strcmp(method, "Publish")) publishing_call(service, BAREV_DBUS_PUBLISH, sender, parameters, invocation);
     else if (!strcmp(method, "ListPosts")) publishing_call(service, BAREV_DBUS_POSTS, sender, parameters, invocation);
     else if (!strcmp(method, "GetPost")) publishing_call(service, BAREV_DBUS_POST, sender, parameters, invocation);
+    else if (!strcmp(method, "ReloadPublishing")) publishing_call(service, BAREV_DBUS_RELOAD, sender, parameters, invocation);
     else {
         g_dbus_method_invocation_return_dbus_error(invocation,
             "org.freedesktop.DBus.Error.UnknownMethod", "Unknown method.");

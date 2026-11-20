@@ -103,10 +103,17 @@ with tempfile.TemporaryDirectory(prefix="dbus-plugin-", dir=build) as directory:
             host.wait("READY ")
             if index == 0:
                 subprocess.run(["gdbus", "wait", "--session", "--timeout", "10", destination], check=True)
-                check(call("GetInfo") == (1, implementation, ["accounts"]))
+                check(call("GetInfo") == (1, implementation, ["accounts"] if c_plugin else ["accounts", "local-posts"]))
                 first = call("ListAccounts")
                 identity = next((profile / "barev/identities").glob("*.key")).stem
                 check(first == ([(identity, "Անի", "200::1")],))
+                if c_plugin:
+                    result = subprocess.run([
+                        "gdbus", "call", "--session", "--dest", destination,
+                        "--object-path", object_path,
+                        "--method", "org.barev.Publishing1.ReloadPublishing", identity,
+                    ], text=True, capture_output=True, timeout=10)
+                    check(result.returncode != 0 and "org.barev.Publishing1.NotSupported" in result.stderr)
             else:
                 check(call("ListAccounts") == first)
         hosts.pop().close()
