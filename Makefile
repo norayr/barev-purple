@@ -360,6 +360,14 @@ tests/post-store-test: $(SOURCE_DIR)/tests/post-store-test.c $(SOURCE_DIR)/post.
 test-post-store: tests/post-store-test
 	"$(abspath tests/post-store-test)"
 
+tests/post-async-test: $(SOURCE_DIR)/tests/post-async-test.c $(SOURCE_DIR)/post-async.c $(SOURCE_DIR)/post-async.h $(SOURCE_DIR)/post.c $(SOURCE_DIR)/post.h $(SOURCE_DIR)/post-store.c $(SOURCE_DIR)/post-store.h $(SOURCE_DIR)/feed-access.c $(SOURCE_DIR)/feed-access.h $(SOURCE_DIR)/address.c $(SOURCE_DIR)/address.h $(SOURCE_DIR)/post-io.c $(SOURCE_DIR)/post-io.h $(SOURCE_DIR)/identity-store.c $(SOURCE_DIR)/identity-store.h
+	mkdir -p tests
+	$(CC) $(CFLAGS) $(LDFLAGS) -std=c11 -Werror $(PURPLE_CFLAGS) $(GLIB_CFLAGS) -I"$(SOURCE_DIR)" "$<" "$(SOURCE_DIR)/post-async.c" "$(SOURCE_DIR)/post.c" "$(SOURCE_DIR)/post-store.c" "$(SOURCE_DIR)/feed-access.c" "$(SOURCE_DIR)/address.c" "$(SOURCE_DIR)/post-io.c" "$(SOURCE_DIR)/identity-store.c" -o "$@" $(GLIB_LIBS)
+
+.PHONY: test-post-async
+test-post-async: tests/post-async-test
+	$(PYTHON) "$(SOURCE_DIR)/tests/check-post-async.py" "$(abspath tests/post-async-test)"
+
 tests/peer-pins-test: $(SOURCE_DIR)/tests/peer-pins-test.c $(SOURCE_DIR)/peer-pins.c $(SOURCE_DIR)/peer-pins.h $(SOURCE_DIR)/address.c
 	mkdir -p tests
 	$(CC) $(CFLAGS) -I"$(SOURCE_DIR)" "$(SOURCE_DIR)/tests/peer-pins-test.c" "$(SOURCE_DIR)/peer-pins.c" "$(SOURCE_DIR)/address.c" -o "$@" $(LDLIBS)

@@ -84,5 +84,6 @@ snapshot bytes, exchange images in both directions and check malformed and
 canonicalized snapshots with an independent Python codec. Validation uses GCC,
 Clang ASan/UBSan and VOC on Linux.
 
-The C plugin keeps its discovery-only capability list while account publishing
-integration is being completed.
+Asynchronous profile checkpointing is described in `post-async.md`. The C plugin
+keeps its discovery-only capability list while account publishing integration is
+being completed.
