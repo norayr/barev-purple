@@ -352,6 +352,14 @@ tests/feed-access-test: $(SOURCE_DIR)/tests/feed-access-test.c $(SOURCE_DIR)/fee
 test-feed-access: tests/feed-access-test
 	"$(abspath tests/feed-access-test)"
 
+tests/post-store-test: $(SOURCE_DIR)/tests/post-store-test.c $(SOURCE_DIR)/post.c $(SOURCE_DIR)/post.h $(SOURCE_DIR)/post-store.c $(SOURCE_DIR)/post-store.h $(SOURCE_DIR)/feed-access.c $(SOURCE_DIR)/feed-access.h $(SOURCE_DIR)/address.c $(SOURCE_DIR)/address.h
+	mkdir -p tests
+	$(CC) $(CFLAGS) $(LDFLAGS) -std=c11 -Werror $(PURPLE_CFLAGS) $(GLIB_CFLAGS) -I"$(SOURCE_DIR)" "$<" "$(SOURCE_DIR)/post.c" "$(SOURCE_DIR)/post-store.c" "$(SOURCE_DIR)/feed-access.c" "$(SOURCE_DIR)/address.c" -o "$@" $(GLIB_LIBS)
+
+.PHONY: test-post-store
+test-post-store: tests/post-store-test
+	"$(abspath tests/post-store-test)"
+
 tests/peer-pins-test: $(SOURCE_DIR)/tests/peer-pins-test.c $(SOURCE_DIR)/peer-pins.c $(SOURCE_DIR)/peer-pins.h $(SOURCE_DIR)/address.c
 	mkdir -p tests
 	$(CC) $(CFLAGS) -I"$(SOURCE_DIR)" "$(SOURCE_DIR)/tests/peer-pins-test.c" "$(SOURCE_DIR)/peer-pins.c" "$(SOURCE_DIR)/address.c" -o "$@" $(LDLIBS)
