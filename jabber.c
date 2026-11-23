@@ -2390,6 +2390,13 @@ void bonjour_jabber_stream_started(BonjourJabberConversation *bconv) {
     }
     if (bconv->ready_notified) return;
     bconv->ready_notified = TRUE;
+    {
+      char fingerprint[72];
+      int state = bonjour_jabber_security(bconv->account, bconv->buddy_name, fingerprint);
+      purple_debug_info("barev", "Peer %s security: %s\n", bconv->buddy_name,
+          state == BAREV_SECURITY_AUTHENTICATED ? "pinned identity authenticated" :
+          state == BAREV_SECURITY_LEGACY ? "legacy (not authenticated)" : "authentication status unavailable");
+    }
     security_changed(bconv);
 
     PurpleBuddy *pb = bconv->pb;

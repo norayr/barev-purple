@@ -1214,6 +1214,8 @@ bonjour_login_barev(PurpleAccount *account)
    * empty blist, making the initial Telepathy contact list empty. */
   bd->images = barev_images_new(account);
   bd->security = BarevSecurityUI_New(account, bonjour_jabber_security, account);
+  purple_debug_info("barev", "Pidgin security indicator: %s\n",
+      bd->security ? "available" : "unavailable in this frontend or build");
   dbus_accounts = g_list_prepend(dbus_accounts, account);
   purple_connection_set_state(gc, PURPLE_CONNECTED);
   BarevDBus_AccountsChanged(dbus_service);
@@ -1311,20 +1313,17 @@ bonjour_close(PurpleConnection *connection)
     bd->reconnect_timer = 0;
   }
 
-  /* Cancel any file transfers (unchanged) */
+  /* Cancellation callbacks remove transfers from this list themselves. */
   while (bd != NULL && bd->xfer_lists != NULL)
   {
-    GList *lxfer = bd->xfer_lists->data;
-    while (lxfer != NULL)
-    {
-      PurpleXfer *xfer = lxfer->data;
-      if (xfer->type == PURPLE_XFER_RECEIVE)
+    PurpleXfer *xfer = bd->xfer_lists->data;
+    bd->xfer_lists = g_slist_delete_link(bd->xfer_lists, bd->xfer_lists);
+    if (xfer != NULL) {
+      if (purple_xfer_get_type(xfer) == PURPLE_XFER_RECEIVE)
         purple_xfer_cancel_remote(xfer);
       else
         purple_xfer_cancel_local(xfer);
-      lxfer = g_list_delete_link(lxfer, lxfer);
     }
-    bd->xfer_lists = g_slist_delete_link(bd->xfer_lists, bd->xfer_lists);
   }
 
   connection->proto_data = NULL;

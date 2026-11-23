@@ -3,6 +3,7 @@
 #include <gmodule.h>
 #include <libpurple/core.h>
 #include <libpurple/eventloop.h>
+#include <libpurple/imgstore.h>
 #include <libpurple/plugin.h>
 #include <libpurple/util.h>
 #include "barev.h"
@@ -23,6 +24,19 @@ static void message_received(PurpleAccount *account, const char *sender, const c
     char *encoded = g_base64_encode((const guchar *)message, strlen(message));
     (void)account; (void)sender; (void)conversation; (void)flags; (void)data;
     printf("MESSAGE %s\n", encoded); g_free(encoded);
+    {
+        const char *at = message, *start, *end;
+        GData *attributes;
+        while (purple_markup_find_tag("img", at, &start, &end, &attributes)) {
+            const char *value = g_datalist_get_data(&attributes, "id");
+            PurpleStoredImage *image = value ? purple_imgstore_find_by_id(atoi(value)) : NULL;
+            if (image) {
+                encoded = g_base64_encode(purple_imgstore_get_data(image), purple_imgstore_get_size(image));
+                printf("IMAGE %s\n", encoded); g_free(encoded);
+            }
+            g_datalist_clear(&attributes); at = end+1;
+        }
+    }
 }
 
 G_MODULE_EXPORT gint bonjour_jabber_start(BonjourJabber *data)
@@ -120,6 +134,19 @@ static gboolean command(gint fd, GIOCondition condition, gpointer data)
             purple_buddy_get_name(buddy), message, PURPLE_MESSAGE_SEND);
         printf("SENT %d\n", result); g_free(message); g_free(decoded);
     }
+    else if (!strcmp(line, "image-send-conversation\n")) {
+        PurpleAccount *account = purple_buddy_get_account(buddy);
+        char *path = g_build_filename(purple_user_dir(), "image-input.png", NULL), *bytes = NULL;
+        gsize size;
+        if (g_file_get_contents(path, &bytes, &size, NULL)) {
+            int id = purple_imgstore_add_with_id(bytes, size, "image-input.png");
+            char *markup = g_strdup_printf("<img id=\"%d\"/>", id);
+            PurpleConversation *conv = purple_conversation_new(PURPLE_CONV_TYPE_IM, account, purple_buddy_get_name(buddy));
+            purple_conv_im_send_with_flags(PURPLE_CONV_IM(conv), markup, PURPLE_MESSAGE_IMAGES);
+            g_free(markup); purple_imgstore_unref_by_id(id);
+        }
+        g_free(path); puts("IMAGE-SENT 0");
+    }
     return G_SOURCE_CONTINUE;
 }
 
@@ -135,6 +162,7 @@ int main(int argc, char **argv)
     int (*identity)(const char *, const char *, const char *, BarevIdentity *);
     void (*stop)(BonjourJabber *);
     int (*open_stream)(BonjourJabber *, const char *);
+    BarevImages *(*new_images)(PurpleAccount *);
     if (argc != 4 && argc != 5) return 2;
     setvbuf(stdin, NULL, _IONBF, 0); setvbuf(stdout, NULL, _IONBF, 0);
     peer_fd = atoi(argv[3]);
@@ -149,6 +177,7 @@ int main(int argc, char **argv)
     LOAD("bonjour_jabber_open_stream", open_stream);
     LOAD("barev_identity_open", identity); LOAD("barev_tls_certificate", certificate);
     LOAD("bonjour_jabber_security", security);
+    LOAD("barev_images_new", new_images);
     account = purple_account_new("alice", "prpl-barev"); purple_accounts_add(account);
     purple_account_set_enabled(account, purple_core_get_ui(), TRUE);
     if (!account->gc || account->gc->proto_data) return 7;
@@ -160,6 +189,10 @@ int main(int argc, char **argv)
     }
     data->jabber_data = g_new0(BonjourJabber, 1); data->jabber_data->account = account; data->jabber_data->port = 1337;
     purple_connection_set_protocol_data(account->gc, data);
+    if (g_getenv("BAREV_TEST_IMAGE_BOB"))
+        purple_account_set_int(account, "image_bob_kib", atoi(g_getenv("BAREV_TEST_IMAGE_BOB")));
+    data->images = new_images(account);
+    account->gc->flags &= ~PURPLE_CONNECTION_NO_IMAGES;
     purple_connection_set_state(account->gc, PURPLE_CONNECTED);
     buddy = purple_buddy_new(account, "bob@200::2", NULL); purple_blist_add_buddy(buddy, NULL, NULL, NULL);
     bb = g_new0(BonjourBuddy, 1); bb->name = g_strdup("bob@200::2");

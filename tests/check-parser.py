@@ -11,5 +11,5 @@ with tempfile.TemporaryDirectory(prefix="barev-parser-", dir=Path(sys.argv[1]).r
                        XDG_CACHE_HOME=profile, XDG_DATA_HOME=profile,
                        G_DEBUG="fatal-criticals", GST_PLUGIN_SYSTEM_PATH_1_0="",
                        GST_PLUGIN_PATH_1_0="", GST_REGISTRY_1_0=os.path.join(profile, "gst.bin"))
-    environment.pop("DBUS_SESSION_BUS_ADDRESS", None)
+    environment["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=" + profile + "/no-session-bus"
     subprocess.run([sys.argv[1], profile, sys.argv[2]], check=True, timeout=30, env=environment)

@@ -31,7 +31,9 @@ static struct {
 G_MODULE_EXPORT int socket(int domain, int type, int protocol)
 {
     int pair[2];
-    (void)domain; (void)type; (void)protocol;
+    (void)type; (void)protocol;
+    /* Keep libpurple's D-Bus startup out of the protocol socket fixture. */
+    if (domain != AF_INET6) { errno = EAFNOSUPPORT; return -1; }
     CHECK(!socketpair(AF_UNIX, SOCK_STREAM, 0, pair));
     if (peer_socket >= 0) close(peer_socket);
     peer_socket = pair[1];

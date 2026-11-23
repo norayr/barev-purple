@@ -9,10 +9,12 @@ from pathlib import Path
 import selectors
 import socket
 import ssl
+import struct
 import subprocess
 import tempfile
 import time
 import xml.etree.ElementTree as ET
+import zlib
 
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
@@ -28,6 +30,16 @@ SEEDS = [bytes(range(32)), bytes(range(1, 33))]
 def public(seed):
     return Ed25519PrivateKey.from_private_bytes(seed).public_key().public_bytes(
         serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+
+
+def image_fixture(width, height, padding=0):
+    def chunk(kind, data):
+        return struct.pack(">I", len(data))+kind+data+struct.pack(">I", zlib.crc32(kind+data))
+    return (b"\x89PNG\r\n\x1a\n"+
+            chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))+
+            (chunk(b"tEXt", b"fixture\0"+b"x"*padding) if padding else b"")+
+            chunk(b"IDAT", zlib.compress((b"\0"+b"\x11\x22\x33"*width)*height))+
+            chunk(b"IEND", b""))
 
 
 def prepare(path, peer_key, seed=SEEDS[0], nick="alice", peer="bob@200::2"):
@@ -156,6 +168,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--native", type=Path)
 parser.add_argument("--c", nargs=2, type=Path, metavar=("HOST", "PLUGIN"))
 parser.add_argument("--cross-only", action="store_true")
+parser.add_argument("--image-bob", type=int, choices=(64, 256), default=64)
 options = parser.parse_args()
 assert options.native or options.c
 assert not options.cross_only or (options.native and options.c)
@@ -357,13 +370,15 @@ with tempfile.TemporaryDirectory(prefix="barev-auth-protocol-") as temporary:
             peer_port = 9 if c_client else listener.getsockname()[1]
             native = Host([str(options.native/"ProtocolHost"), str(options.native/"libvoc-barev-test.so"),
                            str(profiles[1]), str(peer_port), "test", "bob", "alice@200::1"], profiles[1],
-                          extra_env={"BAREV_TEST_LOCAL_IPV6": "200::2", "BAREV_TEST_PEER_IPV6": "200::1"})
+                           extra_env={"BAREV_TEST_LOCAL_IPV6": "200::2", "BAREV_TEST_PEER_IPV6": "200::1",
+                                      "BAREV_TEST_IMAGE_BOB": str(options.image_bob)})
             c_host = None
             try:
                 connection = socket.create_connection(("::1", native.port), timeout=10) if c_client else listener.accept()[0]
                 try:
                     c_host = Host([str(options.c[0]), str(profiles[0]), str(options.c[1]), str(connection.fileno()),
-                                   "client" if c_client else "server"], profiles[0], (connection.fileno(),))
+                                   "client" if c_client else "server"], profiles[0], (connection.fileno(),),
+                                  extra_env={"BAREV_TEST_IMAGE_BOB": str(options.image_bob)})
                 finally: connection.close()
                 deadline = time.monotonic()+15
                 while c_host.state()[0] != 1 or native.state()[0] != 1:
@@ -376,10 +391,27 @@ with tempfile.TemporaryDirectory(prefix="barev-auth-protocol-") as temporary:
                     received = base64.b64decode(receiver.wait("MESSAGE ").split()[1])
                     rendered = "".join(ET.fromstring("<root>"+received.decode()+"</root>").itertext()).encode()
                     assert rendered == message, ("cross-plugin message", c_client, message, received)
+                for sender, receiver, profile in [(c_host, native, profiles[0]), (native, c_host, profiles[1])]:
+                    for image in (image_fixture(2, 1), image_fixture(900, 1000, 100000)):
+                        (profile/"image-input.png").write_bytes(image)
+                        sender.command("image-send-conversation"); sender.wait("IMAGE-SENT ")
+                        preview = base64.b64decode(receiver.wait("IMAGE ").split()[1])
+                        assert preview.startswith(b"\x89PNG\r\n\x1a\n")
+                        width, height = struct.unpack(">II", preview[16:24])
+                        assert (width, height) == ((2, 1) if len(image) < 65536 else (576, 640)), (width, height)
+                        assert sender.state()[0] == receiver.state()[0] == 1
+                assert any("Peer alice@200::1 security: pinned identity authenticated" in event for event in native.events)
+                assert any("Image submission to alice@200::1:" in event and "delivery pending" in event for event in native.events)
+                if options.image_bob == 64:
+                    while not any("Image event for alice@200::1:" in event and "peer acknowledged transfer" in event for event in native.events):
+                        native.wait("DEBUG Image event for alice@200::1:")
+                    assert "FILE-NEW 1" in native.events
+                else:
+                    assert not any(event.startswith("FILE-NEW ") for event in native.events)
                 checks += 1
             finally:
                 listener.close()
                 if c_host: c_host.close()
                 native.close()
-        print("C/Oberon: authenticated messages passed with both initiating roles", flush=True)
+        print("C/Oberon: authenticated messages and BoB/IBB image previews passed with both initiating roles", flush=True)
 print(f"Authenticated plugin streams: {checks} scenarios passed")

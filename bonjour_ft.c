@@ -362,7 +362,8 @@ bonjour_free_xfer(PurpleXfer *xfer)
     g_free(xf->buddy_ip);
     g_free(xf->sid);
 
-    xmlnode_free_tree(xf->streamhost);
+    if (xf->streamhost != NULL)
+      xmlnode_free_tree(xf->streamhost);
 
     g_free(xf);
     xfer->data = NULL;

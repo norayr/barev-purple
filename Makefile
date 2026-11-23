@@ -239,6 +239,14 @@ tests/dbus-plugin-host: $(SOURCE_DIR)/tests/dbus-plugin-host.c $(SOURCE_DIR)/bar
 test-dbus-plugin: $(PLUGIN) tests/dbus-plugin-host
 	dbus-run-session -- $(PYTHON) "$(SOURCE_DIR)/tests/check-dbus-plugin.py" "$(CURDIR)" --c
 
+tests/account-close-test: $(SOURCE_DIR)/tests/account-close-test.c $(SOURCE_DIR)/barev.h
+	mkdir -p tests
+	$(CC) $(CFLAGS) $(LDFLAGS) -I"$(SOURCE_DIR)" "$<" -o "$@" $(LDLIBS) $(shell pkg-config --libs gmodule-2.0)
+
+.PHONY: test-account-close
+test-account-close: $(PLUGIN) tests/account-close-test
+	$(PYTHON) "$(SOURCE_DIR)/tests/check-parser.py" "$(abspath tests/account-close-test)" "$(abspath $(PLUGIN))"
+
 tests/security-ui-test: $(SOURCE_DIR)/tests/security-ui-test.c $(SOURCE_DIR)/tests/security-mock/gtkconv.h $(SOURCE_DIR)/security-ui.c $(SOURCE_DIR)/security-ui.h
 	mkdir -p tests
 	$(CC) $(CFLAGS) -DBAREV_PIDGIN_UI -I"$(SOURCE_DIR)/tests/security-mock" -I"$(SOURCE_DIR)" "$(SOURCE_DIR)/tests/security-ui-test.c" "$(SOURCE_DIR)/security-ui.c" -o "$@" $(shell pkg-config --libs purple gmodule-2.0 gobject-2.0)
