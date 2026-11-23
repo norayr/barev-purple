@@ -169,6 +169,7 @@ parser.add_argument("--native", type=Path)
 parser.add_argument("--c", nargs=2, type=Path, metavar=("HOST", "PLUGIN"))
 parser.add_argument("--cross-only", action="store_true")
 parser.add_argument("--image-bob", type=int, choices=(64, 256), default=64)
+parser.add_argument("--image-name", default="image-input.png")
 options = parser.parse_args()
 assert options.native or options.c
 assert not options.cross_only or (options.native and options.c)
@@ -371,14 +372,16 @@ with tempfile.TemporaryDirectory(prefix="barev-auth-protocol-") as temporary:
             native = Host([str(options.native/"ProtocolHost"), str(options.native/"libvoc-barev-test.so"),
                            str(profiles[1]), str(peer_port), "test", "bob", "alice@200::1"], profiles[1],
                            extra_env={"BAREV_TEST_LOCAL_IPV6": "200::2", "BAREV_TEST_PEER_IPV6": "200::1",
-                                      "BAREV_TEST_IMAGE_BOB": str(options.image_bob)})
+                                      "BAREV_TEST_IMAGE_BOB": str(options.image_bob),
+                                      "BAREV_TEST_IMAGE_NAME": options.image_name})
             c_host = None
             try:
                 connection = socket.create_connection(("::1", native.port), timeout=10) if c_client else listener.accept()[0]
                 try:
                     c_host = Host([str(options.c[0]), str(profiles[0]), str(options.c[1]), str(connection.fileno()),
                                    "client" if c_client else "server"], profiles[0], (connection.fileno(),),
-                                  extra_env={"BAREV_TEST_IMAGE_BOB": str(options.image_bob)})
+                                  extra_env={"BAREV_TEST_IMAGE_BOB": str(options.image_bob),
+                                             "BAREV_TEST_IMAGE_NAME": options.image_name})
                 finally: connection.close()
                 deadline = time.monotonic()+15
                 while c_host.state()[0] != 1 or native.state()[0] != 1:

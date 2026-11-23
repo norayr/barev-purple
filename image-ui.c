@@ -172,6 +172,8 @@ int BarevImageUI_Send(BarevImageUI *ui, const char *who, const char *markup, cha
                 const char *filename = purple_imgstore_get_filename(image);
                 s = g_new0(Sending, 1); s->refs = 1; s->ui = ui; ref(ui); s->who = g_strdup(who);
                 s->name = filename ? g_path_get_basename(filename) : g_strdup("image.png");
+                /* Timestamp punctuation is local metadata, not a portable SI filename. */
+                for (char *at = s->name; *at; ++at) if (*at == ':') *at = '_';
                 s->size = size; s->bytes = g_malloc(size); memcpy(s->bytes, purple_imgstore_get_data(image), size); s->fit = fit;
                 requests = g_list_append(requests, s);
             }

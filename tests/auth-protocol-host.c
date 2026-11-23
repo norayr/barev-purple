@@ -8,6 +8,9 @@
 #include <libpurple/util.h>
 #include "barev.h"
 
+G_MODULE_EXPORT void purple_plugins_add_search_path(const char *path)
+{ (void)path; }
+
 static int peer_fd;
 static GMainLoop *loop;
 static PurpleBuddy *buddy;
@@ -139,7 +142,8 @@ static gboolean command(gint fd, GIOCondition condition, gpointer data)
         char *path = g_build_filename(purple_user_dir(), "image-input.png", NULL), *bytes = NULL;
         gsize size;
         if (g_file_get_contents(path, &bytes, &size, NULL)) {
-            int id = purple_imgstore_add_with_id(bytes, size, "image-input.png");
+            const char *name = g_getenv("BAREV_TEST_IMAGE_NAME");
+            int id = purple_imgstore_add_with_id(bytes, size, name ? name : "image-input.png");
             char *markup = g_strdup_printf("<img id=\"%d\"/>", id);
             PurpleConversation *conv = purple_conversation_new(PURPLE_CONV_TYPE_IM, account, purple_buddy_get_name(buddy));
             purple_conv_im_send_with_flags(PURPLE_CONV_IM(conv), markup, PURPLE_MESSAGE_IMAGES);

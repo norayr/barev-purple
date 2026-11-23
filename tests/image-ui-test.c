@@ -15,6 +15,9 @@
 #include "barev.h"
 #include "images.h"
 
+G_MODULE_EXPORT void purple_plugins_add_search_path(const char *path)
+{ (void)path; }
+
 static unsigned checks, sent, prompts;
 static BarevImageUI *ui;
 static gboolean close_on_new, synchronous;
@@ -24,6 +27,7 @@ static int request_handle;
 static guchar *last_bytes;
 static size_t last_size;
 static char *last_notice;
+static char *last_name;
 static unsigned send_errors;
 #define CHECK(value) do { ++checks; if (!(value)) g_error("image UI check %u failed", checks); } while (0)
 
@@ -32,7 +36,8 @@ G_MODULE_EXPORT gint bonjour_jabber_start(BonjourJabber *data)
 
 static int send_image(gpointer owner, const char *who, const guchar *bytes, size_t size, const char *name)
 {
-    (void)owner; (void)who; (void)name;
+    (void)owner; (void)who;
+    g_free(last_name); last_name = g_strdup(name);
     ++sent; g_free(last_bytes); last_bytes = g_malloc(size); memcpy(last_bytes, bytes, size); last_size = size; return sent;
 }
 static gboolean accept_image(gpointer owner, const char *who, int token, gboolean yes)
@@ -118,7 +123,24 @@ int main(int argc, char **argv)
         memcpy(&width, last_bytes+16, 4); memcpy(&height, last_bytes+20, 4);
         CHECK(GUINT32_FROM_BE(width) <= 1280 && GUINT32_FROM_BE(height) <= 1280);
     }
-    synchronous = FALSE; before = sent;
+    synchronous = FALSE;
+    {
+        guchar *copy = g_malloc(size);
+        int timestamp_id;
+        char *timestamp_markup;
+        PurpleRequestActionCb callback;
+        gpointer data;
+        memcpy(copy, bytes, size);
+        timestamp_id = purple_imgstore_add_with_id(copy, size, "screenshot_2026-01-02_at_03:04:05.png");
+        timestamp_markup = g_strdup_printf("<img id=\"%d\"/>", timestamp_id);
+        CHECK(BarevImageUI_Send(ui, "peer@200::2", timestamp_markup, &stripped) == 1); g_free(stripped);
+        callback = choices[1]; data = argument;
+        purple_request_close(PURPLE_REQUEST_ACTION, &request_handle); callback(data, 1);
+        CHECK(!strcmp(last_name, "screenshot_2026-01-02_at_03_04_05.png"));
+        CHECK(last_size == size && !memcmp(last_bytes, bytes, size));
+        g_free(timestamp_markup); purple_imgstore_unref_by_id(timestamp_id);
+    }
+    before = sent;
     CHECK(BarevImageUI_Send(ui, "peer@200::2", markup, &stripped) == 1); g_free(stripped);
     {
         PurpleRequestActionCb callback = choices[2]; gpointer data = argument;
@@ -160,7 +182,7 @@ int main(int argc, char **argv)
     ui = BarevImageUI_New(account, &backend); close_on_new = TRUE;
     BarevImageUI_Event(ui, "peer@200::2", 2, 5, size, "original.png", "Picture", NULL, 0);
     CHECK(ui == NULL);
-    g_free(markup); purple_imgstore_unref_by_id(id); g_free(last_bytes); g_free(last_notice); last_notice = NULL;
+    g_free(markup); purple_imgstore_unref_by_id(id); g_free(last_bytes); g_free(last_name); g_free(last_notice); last_notice = NULL;
     purple_account_disconnect(account); purple_core_quit();
     g_print("Barev native image UI checks passed: %u\n", checks);
     return 0;
