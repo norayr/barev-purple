@@ -12,6 +12,10 @@
 #include <libpurple/util.h>
 #include "barev.h"
 
+/* Keep libpurple startup confined to explicitly supplied test plugins. */
+G_MODULE_EXPORT void purple_plugins_add_search_path(const char *path)
+{ (void)path; }
+
 static unsigned checks, starts, popups;
 static char *shown_ipv6, *shown_address, *shown_public_key, *shown_fingerprint, *shown_authentication;
 static unsigned errors;

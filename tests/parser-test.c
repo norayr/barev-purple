@@ -11,6 +11,10 @@
 #include "barev.h"
 #include "parser.h"
 
+/* Keep libpurple startup confined to explicitly supplied test plugins. */
+G_MODULE_EXPORT void purple_plugins_add_search_path(const char *path)
+{ (void)path; }
+
 static unsigned checks, started, packets, matched, closed;
 static PurpleAccount *account;
 static PurpleBuddy *known, *other, *lower, *legacy;

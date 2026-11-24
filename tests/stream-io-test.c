@@ -7,6 +7,10 @@
 #include <libpurple/util.h>
 #include "barev.h"
 
+/* Keep libpurple startup confined to explicitly supplied test plugins. */
+G_MODULE_EXPORT void purple_plugins_add_search_path(const char *path)
+{ (void)path; }
+
 #define CHECK(value) do { ++checks; if (!(value)) g_error("stream I/O check %u failed (%s:%d)", checks, __FILE__, __LINE__); } while (0)
 #define OPEN "<s:stream xmlns:s='http://etherx.jabber.org/streams' xmlns='jabber:client'"
 static unsigned checks;

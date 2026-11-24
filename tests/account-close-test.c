@@ -8,6 +8,10 @@
 #include <libpurple/util.h>
 #include "barev.h"
 
+/* Keep libpurple startup confined to explicitly supplied test plugins. */
+G_MODULE_EXPORT void purple_plugins_add_search_path(const char *path)
+{ (void)path; }
+
 static unsigned checks, requests;
 static int request_handle;
 #define CHECK(value) do { ++checks; if (!(value)) g_error("account close check %u failed (%s:%d)", checks, __FILE__, __LINE__); } while (0)

@@ -9,6 +9,10 @@
 #include <libpurple/util.h>
 #include "../avatar-cache.h"
 
+/* Keep libpurple startup confined to explicitly supplied test plugins. */
+G_MODULE_EXPORT void purple_plugins_add_search_path(const char *path)
+{ (void)path; }
+
 static unsigned checks;
 #define CHECK(value) do { ++checks; if (!(value)) g_error("avatar cache check %u failed", checks); } while (0)
 
