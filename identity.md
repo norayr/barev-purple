@@ -58,6 +58,11 @@ SASL EXTERNAL. Each peer proves possession of its persistent Ed25519 key using
 a self-signed TLS certificate. Trust comes from the exact public-key pin.
 Certificates can be renewed without changing the persistent identity or pin.
 
+Certificate validity is checked against each peer's UTC clock. Keep both clocks
+accurate: a newly generated certificate from a peer whose clock is ahead can be
+rejected as not yet valid even when its public key matches the pin. Correct the
+clock before retrying; preserve the verified identity and pin.
+
 The initially selected canonical contact and key remain fixed across the TLS
 and SASL stream restarts. Presence, messages and other application stanzas wait
 until authentication completes. A key mismatch, malformed pin, missing TLS or

@@ -1,5 +1,40 @@
 # Changelog
 
+## 3.2.1 — 2026-11-24
+
+### Chat fixes and troubleshooting
+
+- Normalizing colons in outgoing image filenames so timestamped PNG/JPEG files
+  can be sent, while preserving source files and strict incoming-name validation.
+- Fixing account-disable crashes with pending file transfers and cleaning up
+  transfers whose streamhost has not yet been selected.
+- Reporting peer authentication state and Pidgin shield-adapter availability
+  independently, with additional shutdown diagnostics.
+- Documenting Colorize's outgoing-image removal, Conversation Colors' incoming
+  image suppression, and Debian's `pidgin-dev` requirement for the shield.
+
+### Local publishing infrastructure
+
+- Adding session-bus account discovery through the optional GIO/GDBus interface.
+  The C plugin advertises account discovery; local publishing calls remain
+  capability-gated and return `NotSupported` until its account backend is attached.
+- Adding bounded post records, immutable feed audiences, interoperable snapshots
+  and asynchronous validated checkpoints as backend components. Remote delivery,
+  following and a social frontend remain under development.
+- Requiring GIO 2.54 or newer and Python 3 for the default Linux build. Use
+  `DBUS=0` to omit the local D-Bus interface. See [the interface guide](dbus.md).
+
+### Validation
+
+Linux full-feature builds, headless ASan/UBSan regressions and authenticated
+C/Oberon BoB/IBB interoperability pass. Builds with GTK and D-Bus disabled and
+temporary installation checks also pass. Windows and BSD validation remains
+outstanding.
+
+Back up the libpurple profile before upgrading. Existing identities and pins
+remain valid. See [image troubleshooting](images.md) and
+[shield build requirements](identity.md#why-is-the-shield-missing-on-debian).
+
 ## 3.2.0 — 2026-11-19
 
 - Adding persistent Ed25519 account identities, public keys and SHA-256
