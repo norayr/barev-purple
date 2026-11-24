@@ -35,6 +35,34 @@ image store. HTML conversation logging saves previews beside logs under
 do not create a separate attachment cache. Accepted originals go only to the
 receiver's chosen save location.
 
+## Troubleshooting: received images appear blank or as text
+
+Pidgin's **Conversation Colors** plugin can hide received images when its
+**Ignore incoming format** option is enabled. It strips the image markup before
+display, so a BoB or IBB transfer can finish while the conversation shows a
+blank line or only accompanying text or punctuation.
+
+On the receiving client, open **Tools → Plugins → Conversation Colors →
+Configure** and uncheck **Ignore incoming format**, or disable Conversation
+Colors. Then send the image again. No Barev account, identity or pin changes
+are needed.
+
+Transfer progress and an IBB completion acknowledgement describe the protocol
+transfer; they do not confirm that the receiving frontend displayed the image.
+
+## Troubleshooting: outgoing images disappear when Send is pressed
+
+Pidgin's **Colorize** plugin (`colorize.so`) strips HTML from outgoing messages
+before the protocol plugin receives them. This removes inserted image tags:
+an image-only message becomes empty, while a captioned image sends only its
+text. The composer can display the selected image even though no image reaches
+Barev's BoB or IBB sender. The debug log can report
+`colorize_message: assertion '**message != '\0'' failed` for image-only sends.
+
+On the sending client, open **Tools → Plugins**, disable **Colorize**, and send
+the image again. Changing image size, transfer thresholds or cache contents
+does not restore a tag removed by the outgoing-message filter.
+
 ## Interoperability and limits
 
 Inline images use XHTML-IM `cid:` references with **XEP-0231 BoB** retrieval.

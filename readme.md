@@ -36,6 +36,14 @@ sudo apt install build-essential pkg-config libpurple-dev libglib2.0-dev \
   libxml2-dev libssl-dev libgstreamer1.0-dev libfarstream-0.2-dev python3
 ```
 
+The conversation security shield additionally needs Pidgin/GTK 2 development
+headers. On Debian and derivatives, install `pidgin-dev` before building and use
+`env USE_VV=1 PIDGIN_UI=1 make` to include voice/video and the adapter explicitly.
+Use `USE_VV=0` for a messaging-only build. The default build omits the adapter
+when `pkg-config` cannot find `pidgin`. See the
+[conversation security indicator](identity.md#conversation-security-indicator)
+for display requirements and diagnostics.
+
 For voice/video at runtime, the usual GStreamer plugins are recommended:
 
 ```sh
